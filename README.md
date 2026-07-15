@@ -1,7 +1,3 @@
-# infotecnicos
-
-Segue um README completo, pronto para copiar e colar no GitHub:
-
 # Controle de Documentos de Técnicos
 
 Sistema web simples para gerenciamento de técnicos, documentos ocupacionais e informações de contato, desenvolvido em PHP e utilizando arquivos JSON como armazenamento de dados.
