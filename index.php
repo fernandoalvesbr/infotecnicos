@@ -8,6 +8,7 @@ if (session_status() == PHP_SESSION_NONE) {
 // Configurações de ficheiros
 $arquivoJson = __DIR__ . '/data.json';
 $arquivoUsuariosJson = __DIR__ . '/users.json';
+$arquivoConfigJson = __DIR__ . '/config.json';
 $diretorioUploads = __DIR__ . '/uploads/';
 
 // 1. Cria a estrutura necessária caso não exista
@@ -20,6 +21,9 @@ if (!file_exists($indexUploads)) {
 }
 if (!file_exists($arquivoJson)) {
     @file_put_contents($arquivoJson, json_encode(array()));
+}
+if (!file_exists($arquivoConfigJson)) {
+    @file_put_contents($arquivoConfigJson, json_encode(array('filtro_usuarios' => true)));
 }
 
 // 2. Inicializa o ficheiro de utilizadores com o 'admin' padrão caso não exista
@@ -39,6 +43,11 @@ if (!is_array($funcionarios)) $funcionarios = array();
 
 $usuarios = json_decode(@file_get_contents($arquivoUsuariosJson), true);
 if (!is_array($usuarios)) $usuarios = array();
+
+$config = json_decode(@file_get_contents($arquivoConfigJson), true);
+if (!is_array($config)) $config = array();
+$filtroUsuariosAtivo = !isset($config['filtro_usuarios']) || $config['filtro_usuarios'] === true;
+$isAdmin = isset($_SESSION['usuario']) && $_SESSION['usuario'] === 'admin';
 
 
 // --- LOGIC: LOGOUT ---
@@ -242,6 +251,14 @@ function processarDocumento($filePost, $prefixo, $id, $diretorioUploads) {
 // --- PROCESSAMENTO DE AÇÕES POST ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $acao = isset($_POST['acao']) ? $_POST['acao'] : '';
+
+    // Ação: Configurações do admin
+    if ($acao === 'salvar_config_filtro' && $isAdmin) {
+        $config['filtro_usuarios'] = isset($_POST['filtro_usuarios']) && $_POST['filtro_usuarios'] === '1';
+        file_put_contents($arquivoConfigJson, json_encode($config));
+        header("Location: index.php");
+        exit;
+    }
 
     // Ação: Mudar Minha Palavra-passe
     if ($acao === 'mudar_minha_senha') {
@@ -502,9 +519,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         .modal-footer { margin-top: 20px; text-align: right; }
         .btn-cancel { background-color: var(--text-muted); margin-right: 10px; color: #fff; }
         .user-list-item { display: flex; justify-content: space-between; align-items: center; background: var(--input-bg); border: 1px solid var(--border-color); padding: 8px; margin-bottom: 5px; border-radius: 4px; }
-        .filter-bar { display: flex; justify-content: flex-end; align-items: center; gap: 10px; margin-bottom: 15px; }
+        .filter-bar { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 15px; flex-wrap: wrap; }
         .filter-bar label { color: var(--text-muted); font-size: 14px; }
         .filter-select { width: auto; min-width: 190px; }
+        .filter-controls, .admin-filter-config { display: flex; align-items: center; gap: 10px; }
+        .admin-filter-config { background: var(--input-bg); border: 1px solid var(--border-color); border-radius: 4px; padding: 6px 8px; }
+        .admin-filter-config select { width: auto; padding: 6px; background-color: var(--input-bg); border: 1px solid var(--input-border); color: var(--text-color); border-radius: 4px; }
+        .btn-save-config { background-color: #455a64; padding: 6px 10px; font-size: 12px; }
 
         /* Visualizador de Imagem (Lightbox) */
         .photo-viewer { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.85); align-items: center; justify-content: center; z-index: 2000; cursor: pointer; }
@@ -537,12 +558,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     </div>
 
     <div class="filter-bar">
-        <label for="filtro_tipo_tecnico">Filtrar por tipo</label>
-        <select id="filtro_tipo_tecnico" class="filter-select" onchange="filtrarTecnicos()">
-            <option value="todos" selected>Todos</option>
-            <option value="acesso">Técnico de acesso</option>
-            <option value="redes">Técnico de redes</option>
-        </select>
+        <?php if($isAdmin || $filtroUsuariosAtivo): ?>
+            <div class="filter-controls">
+                <label for="filtro_tipo_tecnico">Filtrar por tipo</label>
+                <select id="filtro_tipo_tecnico" class="filter-select" onchange="filtrarTecnicos()">
+                    <option value="todos" selected>Todos</option>
+                    <option value="acesso">Técnico de acesso</option>
+                    <option value="redes">Técnico de redes</option>
+                </select>
+            </div>
+        <?php else: ?>
+            <div></div>
+        <?php endif; ?>
+
+        <?php if($isAdmin): ?>
+            <form method="POST" class="admin-filter-config">
+                <input type="hidden" name="acao" value="salvar_config_filtro">
+                <label for="filtro_usuarios">Filtro para usuários</label>
+                <select id="filtro_usuarios" name="filtro_usuarios">
+                    <option value="1" <?php echo $filtroUsuariosAtivo ? 'selected' : ''; ?>>Ativado</option>
+                    <option value="0" <?php echo !$filtroUsuariosAtivo ? 'selected' : ''; ?>>Desativado</option>
+                </select>
+                <button type="submit" class="btn btn-save-config"><i class="fa fa-save"></i> Salvar</button>
+            </form>
+        <?php endif; ?>
     </div>
 
     <table>
