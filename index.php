@@ -185,8 +185,10 @@ if (isset($_GET['action']) && $_GET['action'] === 'exportar_excel') {
         'Telefone de Contacto',
         'Contacto de Emergência',
         'Telefone de Emergência',
+        'Tipo de Técnico',
         'Documento ASO',
-        'Documento NR'
+        'Documento NR',
+        'Documento CNH'
     ), ';');
 
     foreach ($funcionarios as $func) {
@@ -199,8 +201,10 @@ if (isset($_GET['action']) && $_GET['action'] === 'exportar_excel') {
             isset($func['tel_contato']) ? $func['tel_contato'] : '',
             isset($func['contato_emergencia']) ? $func['contato_emergencia'] : '',
             isset($func['tel_emergencia']) ? $func['tel_emergencia'] : '',
+            isset($func['tipo_tecnico']) ? $func['tipo_tecnico'] : '',
             isset($func['arquivo_aso']) ? $func['arquivo_aso'] : '',
-            isset($func['arquivo_nr']) ? $func['arquivo_nr'] : ''
+            isset($func['arquivo_nr']) ? $func['arquivo_nr'] : '',
+            isset($func['arquivo_cnh']) ? $func['arquivo_cnh'] : ''
         ), ';');
     }
 
@@ -284,8 +288,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'tel_contato' => isset($linha[7]) ? trim($linha[7]) : '',
                     'tel_emergencia' => $tel_emerg,
                     'contato_emergencia' => $contato_emerg,
+                    'tipo_tecnico' => '',
                     'arquivo_aso' => '',
                     'arquivo_nr' => '',
+                    'arquivo_cnh' => '',
                     'foto_perfil' => ''
                 );
                 $funcionarios[] = $novoFunc;
@@ -310,8 +316,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'tel_contato' => $_POST['tel_contato'],
             'tel_emergencia' => $_POST['tel_emergencia'],
             'contato_emergencia' => $_POST['contato_emergencia'],
+            'tipo_tecnico' => isset($_POST['tipo_tecnico']) ? $_POST['tipo_tecnico'] : 'acesso',
             'arquivo_aso' => isset($_POST['arquivo_aso_atual']) ? $_POST['arquivo_aso_atual'] : '',
             'arquivo_nr' => isset($_POST['arquivo_nr_atual']) ? $_POST['arquivo_nr_atual'] : '',
+            'arquivo_cnh' => isset($_POST['arquivo_cnh_atual']) ? $_POST['arquivo_cnh_atual'] : '',
             'foto_perfil' => isset($_POST['foto_perfil_atual']) ? $_POST['foto_perfil_atual'] : ''
         );
 
@@ -323,6 +331,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $novaNr = processarDocumento($_FILES['foto_nr'], 'nr', $id, $diretorioUploads);
         if ($novaNr !== null) $dados['arquivo_nr'] = $novaNr;
+
+        $novaCnh = processarDocumento($_FILES['foto_cnh'], 'cnh', $id, $diretorioUploads);
+        if ($novaCnh !== null) $dados['arquivo_cnh'] = $novaCnh;
 
         $encontrou = false;
         foreach ($funcionarios as $key => $func) {
@@ -346,6 +357,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($func['id'] === $id) {
                 if (!empty($func['arquivo_aso']) && file_exists($diretorioUploads . $func['arquivo_aso'])) @unlink($diretorioUploads . $func['arquivo_aso']);
                 if (!empty($func['arquivo_nr']) && file_exists($diretorioUploads . $func['arquivo_nr'])) @unlink($diretorioUploads . $func['arquivo_nr']);
+                if (!empty($func['arquivo_cnh']) && file_exists($diretorioUploads . $func['arquivo_cnh'])) @unlink($diretorioUploads . $func['arquivo_cnh']);
                 if (!empty($func['foto_perfil']) && file_exists($diretorioUploads . $func['foto_perfil'])) @unlink($diretorioUploads . $func['foto_perfil']);
                 unset($funcionarios[$key]);
                 break;
@@ -484,12 +496,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         .modal-content { background-color: var(--card-bg); color: var(--text-color); padding: 20px; border-radius: 8px; width: 500px; max-height: 90vh; overflow-y: auto; box-shadow: 0 4px 15px var(--shadow-color); }
         .form-group { margin-bottom: 15px; }
         .form-group label { display: block; margin-bottom: 5px; font-size: 14px; color: var(--text-color); }
-        .form-group input { width: 100%; padding: 8px; background-color: var(--input-bg); border: 1px solid var(--input-border); color: var(--text-color); border-radius: 4px; box-sizing: border-box; }
+        .form-group input, .form-group select, .filter-select { width: 100%; padding: 8px; background-color: var(--input-bg); border: 1px solid var(--input-border); color: var(--text-color); border-radius: 4px; box-sizing: border-box; }
         .form-row { display: flex; gap: 10px; }
         .form-row .form-group { flex: 1; }
         .modal-footer { margin-top: 20px; text-align: right; }
         .btn-cancel { background-color: var(--text-muted); margin-right: 10px; color: #fff; }
         .user-list-item { display: flex; justify-content: space-between; align-items: center; background: var(--input-bg); border: 1px solid var(--border-color); padding: 8px; margin-bottom: 5px; border-radius: 4px; }
+        .filter-bar { display: flex; justify-content: flex-end; align-items: center; gap: 10px; margin-bottom: 15px; }
+        .filter-bar label { color: var(--text-muted); font-size: 14px; }
+        .filter-select { width: auto; min-width: 190px; }
 
         /* Visualizador de Imagem (Lightbox) */
         .photo-viewer { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.85); align-items: center; justify-content: center; z-index: 2000; cursor: pointer; }
@@ -521,21 +536,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         </div>
     </div>
 
+    <div class="filter-bar">
+        <label for="filtro_tipo_tecnico">Filtrar por tipo</label>
+        <select id="filtro_tipo_tecnico" class="filter-select" onchange="filtrarTecnicos()">
+            <option value="todos" selected>Todos</option>
+            <option value="acesso">Técnico de acesso</option>
+            <option value="redes">Técnico de redes</option>
+        </select>
+    </div>
+
     <table>
         <thead>
             <tr>
                 <th>Nome</th>
                 <th>ASO</th>
                 <th>NR</th>
+                <th>CNH</th>
                 <th>Ação</th>
             </tr>
         </thead>
         <tbody>
             <?php if(empty($funcionarios)): ?>
-                <tr><td colspan="4" style="text-align:center; color:var(--text-muted);">Nenhum técnico registado.</td></tr>
+                <tr><td colspan="5" style="text-align:center; color:var(--text-muted);">Nenhum técnico registado.</td></tr>
             <?php endif; ?>
             <?php foreach (array_reverse($funcionarios) as $func): ?>
-            <tr>
+            <tr data-tipo-tecnico="<?php echo isset($func['tipo_tecnico']) ? htmlspecialchars($func['tipo_tecnico']) : ''; ?>">
                 <td>
                     <div class="tech-profile">
                         <div class="tech-avatar-cell">
@@ -565,6 +590,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <?php if (!empty($func['arquivo_nr'])): ?>
                         <?php $v = @filemtime($diretorioUploads . $func['arquivo_nr']); ?>
                         <a href="uploads/<?php echo $func['arquivo_nr']; ?>?v=<?php echo $v; ?>" target="_blank" class="btn btn-doc"><i class="fa fa-check-circle"></i> Ver Doc</a>
+                    <?php else: ?>
+                        <span class="btn btn-none">-</span>
+                    <?php endif; ?>
+                </td>
+                <td>
+                    <?php if (!empty($func['arquivo_cnh'])): ?>
+                        <?php $v = @filemtime($diretorioUploads . $func['arquivo_cnh']); ?>
+                        <a href="uploads/<?php echo $func['arquivo_cnh']; ?>?v=<?php echo $v; ?>" target="_blank" class="btn btn-doc"><i class="fa fa-check-circle"></i> Ver Doc</a>
                     <?php else: ?>
                         <span class="btn btn-none">-</span>
                     <?php endif; ?>
@@ -655,6 +688,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <input type="hidden" name="id" id="func_id">
             <input type="hidden" name="arquivo_aso_atual" id="arquivo_aso_atual">
             <input type="hidden" name="arquivo_nr_atual" id="arquivo_nr_atual">
+            <input type="hidden" name="arquivo_cnh_atual" id="arquivo_cnh_atual">
             <input type="hidden" name="foto_perfil_atual" id="foto_perfil_atual">
 
             <div class="form-group">
@@ -671,6 +705,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <div class="form-group">
                 <label>E-mail Pessoal</label>
                 <input type="email" name="email_pessoal" id="email_pessoal" placeholder="exemplo@email.com">
+            </div>
+
+            <div class="form-group">
+                <label>Tipo de Técnico</label>
+                <select name="tipo_tecnico" id="tipo_tecnico" required>
+                    <option value="acesso">Técnico de acesso</option>
+                    <option value="redes">Técnico de redes</option>
+                </select>
             </div>
             
             <div class="form-row">
@@ -717,6 +759,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <label>Foto/Documento NR</label>
                 <input type="file" name="foto_nr" accept="image/*,.pdf">
                 <small id="nr_status" style="color: #4caf50; display:block; margin-top:4px;"></small>
+            </div>
+
+            <div class="form-group">
+                <label>Foto/Documento CNH</label>
+                <input type="file" name="foto_cnh" accept="image/*,.pdf">
+                <small id="cnh_status" style="color: #4caf50; display:block; margin-top:4px;"></small>
             </div>
 
             <div class="modal-footer">
@@ -774,6 +822,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (localStorage.getItem('theme') === 'light' && icon) {
             icon.className = 'fa fa-moon';
         }
+
+        const filtroTipoTecnico = document.getElementById('filtro_tipo_tecnico');
+        if (filtroTipoTecnico) {
+            filtroTipoTecnico.value = 'todos';
+            filtroTipoTecnico.addEventListener('change', filtrarTecnicos);
+            filtrarTecnicos();
+        }
     });
 
     // Função de Alternar Tema (Modo Claro/Escuro)
@@ -801,10 +856,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     // Funções de Visualização de Dados (Novo)
     function viewInfo(func) {
-        currentInfoText = `Nome: ${func.nome}\nRG: ${func.rg}\nCPF: ${func.cpf}\nE-mail Pessoal: ${func.email_pessoal || 'N/A'}\nTel Empresarial: ${func.tel_empresarial || 'N/A'}\nTel Contacto: ${func.tel_contato}\nContacto de Emergência: ${func.contato_emergencia} (${func.tel_emergencia})`;
+        const tipoTecnico = func.tipo_tecnico === 'redes' ? 'Técnico de redes' : 'Técnico de acesso';
+        currentInfoText = `Nome: ${func.nome}\nTipo: ${tipoTecnico}\nRG: ${func.rg}\nCPF: ${func.cpf}\nE-mail Pessoal: ${func.email_pessoal || 'N/A'}\nTel Empresarial: ${func.tel_empresarial || 'N/A'}\nTel Contacto: ${func.tel_contato}\nContacto de Emergência: ${func.contato_emergencia} (${func.tel_emergencia})`;
 
         infoViewerContent.innerHTML = `
             <p style="margin: 5px 0;"><strong>Nome:</strong> <span style="color:var(--text-strong);">${func.nome}</span></p>
+            <p style="margin: 5px 0;"><strong>Tipo:</strong> <span style="color:var(--text-strong);">${tipoTecnico}</span></p>
             <p style="margin: 5px 0;"><strong>RG:</strong> <span style="color:var(--text-strong);">${func.rg}</span></p>
             <p style="margin: 5px 0;"><strong>CPF:</strong> <span style="color:var(--text-strong);">${func.cpf}</span></p>
             <p style="margin: 5px 0;"><strong>E-mail Pessoal:</strong> <span style="color:var(--text-strong);">${func.email_pessoal || '-'}</span></p>
@@ -850,11 +907,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     function openModal() {
         document.getElementById('modalTitle').innerText = 'Adicionar Técnico';
         document.getElementById('func_id').value = '';
+        document.getElementById('tipo_tecnico').value = 'acesso';
         document.getElementById('arquivo_aso_atual').value = '';
         document.getElementById('arquivo_nr_atual').value = '';
+        document.getElementById('arquivo_cnh_atual').value = '';
         document.getElementById('foto_perfil_atual').value = '';
         document.getElementById('aso_status').innerText = '';
         document.getElementById('nr_status').innerText = '';
+        document.getElementById('cnh_status').innerText = '';
         document.getElementById('foto_status').innerText = '';
         
         const inputs = modal.querySelectorAll('input[type="text"], input[type="email"]');
@@ -878,6 +938,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         document.getElementById('rg').value = func.rg;
         document.getElementById('cpf').value = func.cpf;
         document.getElementById('email_pessoal').value = func.email_pessoal || '';
+        document.getElementById('tipo_tecnico').value = func.tipo_tecnico || 'acesso';
         document.getElementById('tel_empresarial').value = func.tel_empresarial;
         document.getElementById('tel_contato').value = func.tel_contato;
         document.getElementById('tel_emergencia').value = func.tel_emergencia;
@@ -885,13 +946,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         
         document.getElementById('arquivo_aso_atual').value = func.arquivo_aso || '';
         document.getElementById('arquivo_nr_atual').value = func.arquivo_nr || '';
+        document.getElementById('arquivo_cnh_atual').value = func.arquivo_cnh || '';
         document.getElementById('foto_perfil_atual').value = func.foto_perfil || '';
 
         document.getElementById('foto_status').innerText = func.foto_perfil ? 'Foto atual: ' + func.foto_perfil : 'Sem foto de perfil.';
         document.getElementById('aso_status').innerText = func.arquivo_aso ? 'Documento atual: ' + func.arquivo_aso : 'Nenhum ASO salvo.';
         document.getElementById('nr_status').innerText = func.arquivo_nr ? 'Documento atual: ' + func.arquivo_nr : 'Nenhuma NR salva.';
+        document.getElementById('cnh_status').innerText = func.arquivo_cnh ? 'Documento atual: ' + func.arquivo_cnh : 'Nenhuma CNH salva.';
 
         modal.style.display = 'flex';
+    }
+
+    function filtrarTecnicos() {
+        const filtro = document.getElementById('filtro_tipo_tecnico').value;
+        const linhas = document.querySelectorAll('tbody tr[data-tipo-tecnico]');
+
+        linhas.forEach((linha) => {
+            const tipo = linha.getAttribute('data-tipo-tecnico') || 'acesso';
+            linha.style.display = filtro === 'todos' || tipo === filtro ? '' : 'none';
+        });
     }
 </script>
 
