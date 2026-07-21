@@ -187,9 +187,11 @@ if (isset($_GET['action']) && $_GET['action'] === 'exportar_excel') {
     $saida = fopen('php://output', 'w');
     fputcsv($saida, array(
         'Nome Completo',
+        'Nome da Mãe',
         'RG',
         'CPF',
         'E-mail Pessoal',
+        'E-mail Empresarial',
         'Telefone Empresarial',
         'Telefone de Contacto',
         'Contacto de Emergência',
@@ -203,9 +205,11 @@ if (isset($_GET['action']) && $_GET['action'] === 'exportar_excel') {
     foreach ($funcionarios as $func) {
         fputcsv($saida, array(
             isset($func['nome']) ? $func['nome'] : '',
+            isset($func['nome_mae']) ? $func['nome_mae'] : '',
             isset($func['rg']) ? $func['rg'] : '',
             isset($func['cpf']) ? $func['cpf'] : '',
             isset($func['email_pessoal']) ? $func['email_pessoal'] : '',
+            isset($func['email_empresarial']) ? $func['email_empresarial'] : '',
             isset($func['tel_empresarial']) ? $func['tel_empresarial'] : '',
             isset($func['tel_contato']) ? $func['tel_contato'] : '',
             isset($func['contato_emergencia']) ? $func['contato_emergencia'] : '',
@@ -326,9 +330,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $dados = array(
             'id' => $id,
             'nome' => $_POST['nome'],
+            'nome_mae' => isset($_POST['nome_mae']) ? trim($_POST['nome_mae']) : '',
             'rg' => $_POST['rg'],
             'cpf' => $_POST['cpf'],
             'email_pessoal' => isset($_POST['email_pessoal']) ? trim($_POST['email_pessoal']) : '',
+            'email_empresarial' => isset($_POST['email_empresarial']) ? trim($_POST['email_empresarial']) : '',
             'tel_empresarial' => $_POST['tel_empresarial'],
             'tel_contato' => $_POST['tel_contato'],
             'tel_emergencia' => $_POST['tel_emergencia'],
@@ -747,6 +753,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             </div>
 
             <div class="form-group">
+                <label>E-mail Empresarial</label>
+                <input type="email" name="email_empresarial" id="email_empresarial" placeholder="nome@empresa.com.br">
+            </div>
+
+            <div class="form-group">
                 <label>Tipo de Técnico</label>
                 <select name="tipo_tecnico" id="tipo_tecnico" required>
                     <option value="acesso">Técnico de acesso</option>
@@ -774,6 +785,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <label>Telefone de Contacto</label>
                     <input type="text" name="tel_contato" id="tel_contato" required>
                 </div>
+            </div>
+
+            <div class="form-group">
+                <label>Nome da Mãe</label>
+                <input type="text" name="nome_mae" id="nome_mae">
             </div>
 
             <div class="form-group" style="background: var(--input-bg); border: 1px solid var(--border-color); padding: 10px; border-radius: 4px;">
@@ -896,14 +912,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // Funções de Visualização de Dados (Novo)
     function viewInfo(func) {
         const tipoTecnico = func.tipo_tecnico === 'redes' ? 'Técnico de redes' : 'Técnico de acesso';
-        currentInfoText = `Nome: ${func.nome}\nTipo: ${tipoTecnico}\nRG: ${func.rg}\nCPF: ${func.cpf}\nE-mail Pessoal: ${func.email_pessoal || 'N/A'}\nTel Empresarial: ${func.tel_empresarial || 'N/A'}\nTel Contacto: ${func.tel_contato}\nContacto de Emergência: ${func.contato_emergencia} (${func.tel_emergencia})`;
+        currentInfoText = `Nome: ${func.nome}\nNome da Mãe: ${func.nome_mae || 'N/A'}\nTipo: ${tipoTecnico}\nRG: ${func.rg}\nCPF: ${func.cpf}\nE-mail Pessoal: ${func.email_pessoal || 'N/A'}\nE-mail Empresarial: ${func.email_empresarial || 'N/A'}\nTel Empresarial: ${func.tel_empresarial || 'N/A'}\nTel Contacto: ${func.tel_contato}\nContacto de Emergência: ${func.contato_emergencia} (${func.tel_emergencia})`;
 
         infoViewerContent.innerHTML = `
             <p style="margin: 5px 0;"><strong>Nome:</strong> <span style="color:var(--text-strong);">${func.nome}</span></p>
+            <p style="margin: 5px 0;"><strong>Nome da Mãe:</strong> <span style="color:var(--text-strong);">${func.nome_mae || '-'}</span></p>
             <p style="margin: 5px 0;"><strong>Tipo:</strong> <span style="color:var(--text-strong);">${tipoTecnico}</span></p>
             <p style="margin: 5px 0;"><strong>RG:</strong> <span style="color:var(--text-strong);">${func.rg}</span></p>
             <p style="margin: 5px 0;"><strong>CPF:</strong> <span style="color:var(--text-strong);">${func.cpf}</span></p>
             <p style="margin: 5px 0;"><strong>E-mail Pessoal:</strong> <span style="color:var(--text-strong);">${func.email_pessoal || '-'}</span></p>
+            <p style="margin: 5px 0;"><strong>E-mail Empresarial:</strong> <span style="color:var(--text-strong);">${func.email_empresarial || '-'}</span></p>
             <p style="margin: 5px 0;"><strong>Tel Empresarial:</strong> <span style="color:var(--text-strong);">${func.tel_empresarial || '-'}</span></p>
             <p style="margin: 5px 0;"><strong>Tel Contacto:</strong> <span style="color:var(--text-strong);">${func.tel_contato}</span></p>
             <div style="margin-top:15px; padding-top:10px; border-top: 1px solid var(--border-color);">
@@ -974,9 +992,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         document.getElementById('modalTitle').innerText = 'Editar Técnico';
         document.getElementById('func_id').value = func.id;
         document.getElementById('nome').value = func.nome;
+        document.getElementById('nome_mae').value = func.nome_mae || '';
         document.getElementById('rg').value = func.rg;
         document.getElementById('cpf').value = func.cpf;
         document.getElementById('email_pessoal').value = func.email_pessoal || '';
+        document.getElementById('email_empresarial').value = func.email_empresarial || '';
         document.getElementById('tipo_tecnico').value = func.tipo_tecnico || 'acesso';
         document.getElementById('tel_empresarial').value = func.tel_empresarial;
         document.getElementById('tel_contato').value = func.tel_contato;
