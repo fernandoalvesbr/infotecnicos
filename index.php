@@ -871,6 +871,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 </div>
 
 <script>
+    const usuarioAtual = <?php echo json_encode($_SESSION["usuario"]); ?>;
+    const filtroTipoTecnicoStorageKey = 'filtro_tipo_tecnico_' + usuarioAtual;
+
     // Inicialização do Icone do Tema
     window.addEventListener('DOMContentLoaded', () => {
         const icon = document.getElementById('themeIcon');
@@ -880,7 +883,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         const filtroTipoTecnico = document.getElementById('filtro_tipo_tecnico');
         if (filtroTipoTecnico) {
-            filtroTipoTecnico.value = 'todos';
+            const filtroSalvo = localStorage.getItem(filtroTipoTecnicoStorageKey);
+            const filtroSalvoExiste = Array.from(filtroTipoTecnico.options).some((option) => option.value === filtroSalvo);
+            if (filtroSalvo && filtroSalvoExiste) {
+                filtroTipoTecnico.value = filtroSalvo;
+            }
             filtroTipoTecnico.addEventListener('change', filtrarTecnicos);
             filtrarTecnicos();
         }
@@ -1017,7 +1024,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     function filtrarTecnicos() {
-        const filtro = document.getElementById('filtro_tipo_tecnico').value;
+        const filtroTipoTecnico = document.getElementById('filtro_tipo_tecnico');
+        if (!filtroTipoTecnico) return;
+
+        const filtro = filtroTipoTecnico.value;
+        localStorage.setItem(filtroTipoTecnicoStorageKey, filtro);
         const linhas = document.querySelectorAll('tbody tr[data-tipo-tecnico]');
 
         linhas.forEach((linha) => {
