@@ -4,11 +4,13 @@ if (session_status() == PHP_SESSION_NONE) {
     session_name('SISTEMA_DOCS_TECNICOS');
     session_start();
 }
+date_default_timezone_set('America/Sao_Paulo');
 
 // Configurações de ficheiros
 $arquivoJson = __DIR__ . '/data.json';
 $arquivoUsuariosJson = __DIR__ . '/users.json';
 $arquivoConfigJson = __DIR__ . '/config.json';
+$arquivoHistoricoJson = __DIR__ . '/history.json';
 $diretorioUploads = __DIR__ . '/uploads/';
 
 // 1. Cria a estrutura necessária caso não exista
@@ -24,6 +26,9 @@ if (!file_exists($arquivoJson)) {
 }
 if (!file_exists($arquivoConfigJson)) {
     @file_put_contents($arquivoConfigJson, json_encode(array('filtro_usuarios' => true)));
+}
+if (!file_exists($arquivoHistoricoJson)) {
+    @file_put_contents($arquivoHistoricoJson, json_encode(array()));
 }
 
 // 2. Inicializa o ficheiro de utilizadores com o 'admin' padrão caso não exista
@@ -46,12 +51,69 @@ if (!is_array($usuarios)) $usuarios = array();
 
 $config = json_decode(@file_get_contents($arquivoConfigJson), true);
 if (!is_array($config)) $config = array();
+$historico = json_decode(@file_get_contents($arquivoHistoricoJson), true);
+if (!is_array($historico)) $historico = array();
 $filtroUsuariosAtivo = !isset($config['filtro_usuarios']) || $config['filtro_usuarios'] === true;
 $isAdmin = isset($_SESSION['usuario']) && $_SESSION['usuario'] === 'admin';
+
+function registrarHistorico($arquivoHistoricoJson, $usuario, $acao, $detalhes = '') {
+    $historico = json_decode(@file_get_contents($arquivoHistoricoJson), true);
+    if (!is_array($historico)) $historico = array();
+
+    array_unshift($historico, array(
+        'data_hora' => date('d/m/Y H:i:s'),
+        'usuario' => $usuario,
+        'acao' => $acao,
+        'detalhes' => $detalhes
+    ));
+
+    $historico = array_slice($historico, 0, 100);
+    file_put_contents($arquivoHistoricoJson, json_encode($historico, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+}
+
+function nomeTecnicoPorId($funcionarios, $id) {
+    foreach ($funcionarios as $func) {
+        if (isset($func['id']) && $func['id'] === $id) {
+            return isset($func['nome']) ? $func['nome'] : $id;
+        }
+    }
+    return $id;
+}
+
+function camposAlterados($antes, $depois) {
+    if (!is_array($antes)) return array();
+    $campos = array(
+        'nome' => 'Nome',
+        'nome_mae' => 'Nome da mãe',
+        'rg' => 'RG',
+        'cpf' => 'CPF',
+        'email_pessoal' => 'E-mail pessoal',
+        'email_empresarial' => 'E-mail empresarial',
+        'tel_empresarial' => 'Telefone empresarial',
+        'tel_contato' => 'Telefone de contacto',
+        'tel_emergencia' => 'Telefone de emergência',
+        'contato_emergencia' => 'Contacto de emergência',
+        'tipo_tecnico' => 'Tipo de técnico',
+        'arquivo_aso' => 'Documento ASO',
+        'arquivo_nr' => 'Documento NR',
+        'arquivo_cnh' => 'Documento CNH',
+        'foto_perfil' => 'Foto de perfil'
+    );
+    $alterados = array();
+    foreach ($campos as $campo => $rotulo) {
+        $valorAntes = isset($antes[$campo]) ? (string)$antes[$campo] : '';
+        $valorDepois = isset($depois[$campo]) ? (string)$depois[$campo] : '';
+        if ($valorAntes !== $valorDepois) $alterados[] = $rotulo;
+    }
+    return $alterados;
+}
 
 
 // --- LOGIC: LOGOUT ---
 if (isset($_GET['action']) && $_GET['action'] === 'logout') {
+    if (isset($_SESSION['usuario'])) {
+        registrarHistorico($arquivoHistoricoJson, $_SESSION['usuario'], 'Logout', 'Saiu do sistema');
+    }
     session_destroy();
     header("Location: index.php");
     exit;
@@ -67,6 +129,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['acao_login'])) {
         if ($u['username'] === $user_input && password_verify($pass_input, $u['password'])) {
             $_SESSION['logado'] = true;
             $_SESSION['usuario'] = $u['username'];
+            registrarHistorico($arquivoHistoricoJson, $u['username'], 'Login', 'Entrou no sistema');
             header("Location: index.php");
             exit;
         }
@@ -166,9 +229,38 @@ if (!isset($_SESSION['logado']) || $_SESSION['logado'] !== true) {
     exit;
 }
 
+// --- LOGIC: ABRIR DOCUMENTO COM REGISTRO NO HISTÓRICO ---
+if (isset($_GET['action']) && $_GET['action'] === 'abrir_doc') {
+    $arquivo = isset($_GET['arquivo']) ? basename($_GET['arquivo']) : '';
+    $tipoDoc = isset($_GET['tipo']) ? strtoupper($_GET['tipo']) : 'DOCUMENTO';
+    $idTecnico = isset($_GET['id']) ? $_GET['id'] : '';
+    $caminhoArquivo = $diretorioUploads . $arquivo;
+
+    if (!empty($arquivo) && file_exists($caminhoArquivo)) {
+        $nomeTecnico = nomeTecnicoPorId($funcionarios, $idTecnico);
+        registrarHistorico($arquivoHistoricoJson, $_SESSION['usuario'], 'Visualizou documento', $tipoDoc . ' de ' . $nomeTecnico);
+        header("Location: uploads/" . rawurlencode($arquivo));
+        exit;
+    }
+
+    header("Location: index.php");
+    exit;
+}
+
+// --- LOGIC: REGISTRAR CLIQUE EM DOCUMENTO ---
+if (isset($_GET['action']) && $_GET['action'] === 'registrar_doc_click') {
+    $tipoDoc = isset($_POST['tipo']) ? strtoupper($_POST['tipo']) : 'DOCUMENTO';
+    $idTecnico = isset($_POST['id']) ? $_POST['id'] : '';
+    $nomeTecnico = nomeTecnicoPorId($funcionarios, $idTecnico);
+    registrarHistorico($arquivoHistoricoJson, $_SESSION['usuario'], 'Visualizou documento', $tipoDoc . ' de ' . $nomeTecnico);
+    http_response_code(204);
+    exit;
+}
+
 // --- EXPORTAÇÃO: PLANILHA COMPATÍVEL COM EXCEL (CSV UTF-8) ---
 // O CSV utiliza ponto e vírgula, formato normalmente reconhecido pelo Excel em PT-BR.
 if (isset($_GET['action']) && $_GET['action'] === 'exportar_excel') {
+    registrarHistorico($arquivoHistoricoJson, $_SESSION['usuario'], 'Exportou Excel', 'Exportou a lista de técnicos');
     $nomeArquivo = 'tecnicos_' . date('Y-m-d_H-i-s') . '.csv';
 
     // Evita qualquer conteúdo antes do arquivo baixado.
@@ -260,6 +352,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($acao === 'salvar_config_filtro' && $isAdmin) {
         $config['filtro_usuarios'] = isset($_POST['filtro_usuarios']) && $_POST['filtro_usuarios'] === '1';
         file_put_contents($arquivoConfigJson, json_encode($config));
+        registrarHistorico($arquivoHistoricoJson, $_SESSION['usuario'], 'Alterou configuração', 'Filtro para usuários: ' . ($config['filtro_usuarios'] ? 'Ativado' : 'Desativado'));
         header("Location: index.php");
         exit;
     }
@@ -274,6 +367,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if (password_verify($senha_atual, $u['password'])) {
                     $usuarios[$key]['password'] = password_hash($nova_senha, PASSWORD_DEFAULT);
                     file_put_contents($arquivoUsuariosJson, json_encode($usuarios));
+                    registrarHistorico($arquivoHistoricoJson, $_SESSION['usuario'], 'Alterou senha', 'Alterou a própria senha');
                 }
                 break;
             }
@@ -284,6 +378,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     // Ação: Importar CSV
     if ($acao === 'importar_csv') {
+        $importados = 0;
         if (isset($_FILES['arquivo_csv']) && $_FILES['arquivo_csv']['error'] === UPLOAD_ERR_OK) {
             $file = fopen($_FILES['arquivo_csv']['tmp_name'], 'r');
             $primeiraLinha = fgets($file);
@@ -316,9 +411,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'foto_perfil' => ''
                 );
                 $funcionarios[] = $novoFunc;
+                $importados++;
             }
             fclose($file);
             file_put_contents($arquivoJson, json_encode($funcionarios));
+            registrarHistorico($arquivoHistoricoJson, $_SESSION['usuario'], 'Importou CSV', 'Importou ' . $importados . ' técnico(s)');
         }
         header("Location: index.php");
         exit;
@@ -327,6 +424,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // Ação: Salvar/Editar Técnico
     if ($acao === 'salvar') {
         $id = isset($_POST['id']) && !empty($_POST['id']) ? $_POST['id'] : uniqid();
+        $dadosAntes = null;
+        foreach ($funcionarios as $func) {
+            if (isset($func['id']) && $func['id'] === $id) {
+                $dadosAntes = $func;
+                break;
+            }
+        }
         $dados = array(
             'id' => $id,
             'nome' => $_POST['nome'],
@@ -369,6 +473,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!$encontrou) $funcionarios[] = $dados;
 
         file_put_contents($arquivoJson, json_encode($funcionarios));
+        if ($encontrou) {
+            $alterados = camposAlterados($dadosAntes, $dados);
+            $detalhes = 'Editou ' . $dados['nome'];
+            if (!empty($alterados)) $detalhes .= ' | Campos: ' . implode(', ', $alterados);
+            registrarHistorico($arquivoHistoricoJson, $_SESSION['usuario'], 'Editou técnico', $detalhes);
+        } else {
+            registrarHistorico($arquivoHistoricoJson, $_SESSION['usuario'], 'Criou técnico', 'Adicionou ' . $dados['nome']);
+        }
         header("Location: index.php");
         exit;
     }
@@ -378,6 +490,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $id = $_POST['id'];
         foreach ($funcionarios as $key => $func) {
             if ($func['id'] === $id) {
+                $nomeExcluido = isset($func['nome']) ? $func['nome'] : $id;
                 if (!empty($func['arquivo_aso']) && file_exists($diretorioUploads . $func['arquivo_aso'])) @unlink($diretorioUploads . $func['arquivo_aso']);
                 if (!empty($func['arquivo_nr']) && file_exists($diretorioUploads . $func['arquivo_nr'])) @unlink($diretorioUploads . $func['arquivo_nr']);
                 if (!empty($func['arquivo_cnh']) && file_exists($diretorioUploads . $func['arquivo_cnh'])) @unlink($diretorioUploads . $func['arquivo_cnh']);
@@ -388,6 +501,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         $funcionarios = array_values($funcionarios);
         file_put_contents($arquivoJson, json_encode($funcionarios));
+        registrarHistorico($arquivoHistoricoJson, $_SESSION['usuario'], 'Excluiu técnico', 'Excluiu ' . (isset($nomeExcluido) ? $nomeExcluido : $id));
         header("Location: index.php");
         exit;
     }
@@ -408,6 +522,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $usuarios[] = array('username' => $username_form, 'password' => password_hash($password_form, PASSWORD_DEFAULT));
             }
             file_put_contents($arquivoUsuariosJson, json_encode($usuarios));
+            registrarHistorico($arquivoHistoricoJson, $_SESSION['usuario'], $encontrouUsuario ? 'Editou usuário' : 'Criou usuário', 'Usuário: ' . $username_form);
         }
         header("Location: index.php");
         exit;
@@ -422,6 +537,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             $usuarios = array_values($usuarios);
             file_put_contents($arquivoUsuariosJson, json_encode($usuarios));
+            registrarHistorico($arquivoHistoricoJson, $_SESSION['usuario'], 'Excluiu usuário', 'Usuário: ' . $user_para_excluir);
         }
         header("Location: index.php");
         exit;
@@ -491,6 +607,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         .btn-export { background-color: #00897b; margin-right: 5px; }
         .btn-user { background-color: #7b1fa2; margin-right: 5px; }
         .btn-theme-btn { background-color: var(--btn-theme); margin-right: 5px; }
+        .btn-history { background-color: #546e7a; margin-right: 5px; }
         .btn-pwd { background-color: #f57c00; font-size: 12px; padding: 5px 10px;}
         .btn-logout { background-color: #616161; font-size: 12px; padding: 5px 10px; margin-left: 5px;}
         .btn-edit { background-color: #1976d2; padding: 6px 10px; }
@@ -532,6 +649,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         .admin-filter-config { background: var(--input-bg); border: 1px solid var(--border-color); border-radius: 4px; padding: 6px 8px; }
         .admin-filter-config select { width: auto; padding: 6px; background-color: var(--input-bg); border: 1px solid var(--input-border); color: var(--text-color); border-radius: 4px; }
         .btn-save-config { background-color: #455a64; padding: 6px 10px; font-size: 12px; }
+        .history-list { display: flex; flex-direction: column; gap: 8px; max-height: 60vh; overflow-y: auto; }
+        .history-item { background: var(--input-bg); border: 1px solid var(--border-color); border-radius: 6px; padding: 10px; }
+        .history-top { display: flex; justify-content: space-between; gap: 10px; align-items: center; margin-bottom: 5px; }
+        .history-action { color: var(--text-strong); font-weight: 700; }
+        .history-date { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
+        .history-details { color: var(--text-color); font-size: 13px; line-height: 1.4; }
+        .history-user { color: var(--text-muted); font-size: 12px; margin-top: 5px; }
 
         /* Visualizador de Imagem (Lightbox) */
         .photo-viewer { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.85); align-items: center; justify-content: center; z-index: 2000; cursor: pointer; }
@@ -553,6 +677,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <div>
             <!-- Botão de Tema -->
             <button class="btn btn-theme-btn" onclick="toggleTheme()" title="Alternar Modo Claro / Escuro"><i class="fa fa-sun" id="themeIcon"></i></button>
+            <button class="btn btn-history" onclick="openHistoryModal()" title="Histórico de atividades"><i class="fa fa-clock-rotate-left"></i></button>
             
             <?php if($_SESSION['usuario'] === 'admin'): ?>
                 <button class="btn btn-user" onclick="openUserModal()" title="Gerir Utilizadores"><i class="fa fa-user-gear"></i></button>
@@ -626,7 +751,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <td>
                     <?php if (!empty($func['arquivo_aso'])): ?>
                         <?php $v = @filemtime($diretorioUploads . $func['arquivo_aso']); ?>
-                        <a href="uploads/<?php echo $func['arquivo_aso']; ?>?v=<?php echo $v; ?>" target="_blank" class="btn btn-doc"><i class="fa fa-check-circle"></i> Ver Doc</a>
+                        <a href="uploads/<?php echo htmlspecialchars($func['arquivo_aso']); ?>?v=<?php echo $v; ?>" target="_blank" class="btn btn-doc" onclick="registrarCliqueDocumento('ASO', '<?php echo htmlspecialchars($func['id'], ENT_QUOTES, 'UTF-8'); ?>')"><i class="fa fa-check-circle"></i> Ver Doc</a>
                     <?php else: ?>
                         <span class="btn btn-none">-</span>
                     <?php endif; ?>
@@ -634,7 +759,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <td>
                     <?php if (!empty($func['arquivo_nr'])): ?>
                         <?php $v = @filemtime($diretorioUploads . $func['arquivo_nr']); ?>
-                        <a href="uploads/<?php echo $func['arquivo_nr']; ?>?v=<?php echo $v; ?>" target="_blank" class="btn btn-doc"><i class="fa fa-check-circle"></i> Ver Doc</a>
+                        <a href="uploads/<?php echo htmlspecialchars($func['arquivo_nr']); ?>?v=<?php echo $v; ?>" target="_blank" class="btn btn-doc" onclick="registrarCliqueDocumento('NR', '<?php echo htmlspecialchars($func['id'], ENT_QUOTES, 'UTF-8'); ?>')"><i class="fa fa-check-circle"></i> Ver Doc</a>
                     <?php else: ?>
                         <span class="btn btn-none">-</span>
                     <?php endif; ?>
@@ -642,7 +767,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <td>
                     <?php if (!empty($func['arquivo_cnh'])): ?>
                         <?php $v = @filemtime($diretorioUploads . $func['arquivo_cnh']); ?>
-                        <a href="uploads/<?php echo $func['arquivo_cnh']; ?>?v=<?php echo $v; ?>" target="_blank" class="btn btn-doc"><i class="fa fa-check-circle"></i> Ver Doc</a>
+                        <a href="uploads/<?php echo htmlspecialchars($func['arquivo_cnh']); ?>?v=<?php echo $v; ?>" target="_blank" class="btn btn-doc" onclick="registrarCliqueDocumento('CNH', '<?php echo htmlspecialchars($func['id'], ENT_QUOTES, 'UTF-8'); ?>')"><i class="fa fa-check-circle"></i> Ver Doc</a>
                     <?php else: ?>
                         <span class="btn btn-none">-</span>
                     <?php endif; ?>
@@ -676,6 +801,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <div class="modal-footer" style="margin-top: 20px;">
             <button type="button" class="btn btn-cancel" onclick="closeInfoView()">Fechar</button>
             <button type="button" class="btn btn-import" onclick="copyInfo()"><i class="fa fa-copy"></i> Copiar Dados</button>
+        </div>
+    </div>
+</div>
+
+<!-- MODAL: HISTÓRICO DE ATIVIDADES -->
+<div class="modal" id="historyModal">
+    <div class="modal-content" style="width: 650px;">
+        <h3 style="margin-top:0; border-bottom: 1px solid var(--border-color); padding-bottom: 10px;"><i class="fa fa-clock-rotate-left"></i> Histórico de Atividades</h3>
+        <div class="history-list">
+            <?php if(empty($historico)): ?>
+                <div style="text-align:center; color:var(--text-muted); padding: 20px;">Nenhum registro no histórico.</div>
+            <?php endif; ?>
+            <?php foreach($historico as $registro): ?>
+                <div class="history-item">
+                    <div class="history-top">
+                        <span class="history-action"><?php echo htmlspecialchars(isset($registro['acao']) ? $registro['acao'] : 'Atividade'); ?></span>
+                        <span class="history-date"><?php echo htmlspecialchars(isset($registro['data_hora']) ? $registro['data_hora'] : ''); ?></span>
+                    </div>
+                    <div class="history-details"><?php echo htmlspecialchars(isset($registro['detalhes']) ? $registro['detalhes'] : ''); ?></div>
+                    <div class="history-user">Usuário: <strong><?php echo htmlspecialchars(isset($registro['usuario']) ? $registro['usuario'] : '-'); ?></strong></div>
+                </div>
+            <?php endforeach; ?>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-cancel" onclick="closeHistoryModal()">Fechar</button>
         </div>
     </div>
 </div>
@@ -906,10 +1056,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 
+    function registrarCliqueDocumento(tipo, idTecnico) {
+        const dados = new FormData();
+        dados.append('tipo', tipo);
+        dados.append('id', idTecnico);
+
+        if (navigator.sendBeacon) {
+            navigator.sendBeacon('index.php?action=registrar_doc_click', dados);
+            return;
+        }
+
+        fetch('index.php?action=registrar_doc_click', {
+            method: 'POST',
+            body: dados,
+            keepalive: true
+        }).catch(() => {});
+    }
+
     const modal = document.getElementById('formModal');
     const userModal = document.getElementById('userModal');
     const importModal = document.getElementById('importModal');
     const pwdModal = document.getElementById('pwdModal');
+    const historyModal = document.getElementById('historyModal');
     const photoViewerModal = document.getElementById('photoViewerModal');
     const fullSizeImage = document.getElementById('fullSizeImage');
     const infoViewerModal = document.getElementById('infoViewerModal');
@@ -993,6 +1161,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     function closeImportModal() { importModal.style.display = 'none'; }
     function openPwdModal() { pwdModal.style.display = 'flex'; }
     function closePwdModal() { pwdModal.style.display = 'none'; }
+    function openHistoryModal() { historyModal.style.display = 'flex'; }
+    function closeHistoryModal() { historyModal.style.display = 'none'; }
 
     // Editar Funcionario
     function editFunc(func) {
