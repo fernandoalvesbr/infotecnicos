@@ -774,7 +774,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         .btn-delete { background-color: #d32f2f; padding: 6px 10px; }
         .btn-doc { background-color: #2e7d32; padding: 4px 8px; font-size: 12px; border-radius: 12px; }
         .btn-none { background-color: var(--input-bg); padding: 4px 8px; font-size: 12px; border-radius: 12px; color: var(--text-muted); border: 1px solid var(--border-color); cursor: default; }
-        .vacation-dates { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-strong); white-space: nowrap; }
+        .vacation-dates { display: inline-flex; align-items: center; gap: 5px; font-size: 14px; color: var(--text-strong); white-space: nowrap; }
         .vacation-dates i { color: var(--accent-orange); }
         .vacation-dates small { color: var(--text-muted); font-weight: 600; }
         tr.vacation-warning { background-color: rgba(255, 193, 7, 0.18); }
