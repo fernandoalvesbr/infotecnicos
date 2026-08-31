@@ -54,6 +54,7 @@ if (!is_array($config)) $config = array();
 $historico = json_decode(@file_get_contents($arquivoHistoricoJson), true);
 if (!is_array($historico)) $historico = array();
 $filtroUsuariosAtivo = !isset($config['filtro_usuarios']) || $config['filtro_usuarios'] === true;
+$emailFeriasAtivo = isset($config['email_ferias_ativo']) && $config['email_ferias_ativo'] === true;
 $isAdmin = isset($_SESSION['usuario']) && $_SESSION['usuario'] === 'admin';
 
 function registrarHistorico($arquivoHistoricoJson, $usuario, $acao, $detalhes = '') {
@@ -172,6 +173,109 @@ function excluirDiretorio($diretorio) {
     }
 
     @rmdir($diretorio);
+}
+
+function lerRespostaSmtp($socket) {
+    $resposta = '';
+    while (($linha = fgets($socket, 515)) !== false) {
+        $resposta .= $linha;
+        if (strlen($linha) >= 4 && $linha[3] === ' ') break;
+    }
+    return $resposta;
+}
+
+function enviarComandoSmtp($socket, $comando, $codigosEsperados) {
+    fwrite($socket, $comando . "\r\n");
+    $resposta = lerRespostaSmtp($socket);
+    $codigo = substr($resposta, 0, 3);
+    return in_array($codigo, $codigosEsperados, true);
+}
+
+function enviarEmailSmtp($host, $porta, $usuario, $senha, $de, $para, $assunto, $mensagem) {
+    if (empty($senha)) return false;
+
+    $socket = @fsockopen($host, $porta, $errno, $errstr, 20);
+    if (!$socket) return false;
+
+    stream_set_timeout($socket, 20);
+    $respostaInicial = lerRespostaSmtp($socket);
+    if (substr($respostaInicial, 0, 3) !== '220') {
+        fclose($socket);
+        return false;
+    }
+
+    $nomeServidorLocal = isset($_SERVER['SERVER_NAME']) ? $_SERVER['SERVER_NAME'] : 'localhost';
+    $ok = enviarComandoSmtp($socket, 'EHLO ' . $nomeServidorLocal, array('250'))
+        && enviarComandoSmtp($socket, 'AUTH LOGIN', array('334'))
+        && enviarComandoSmtp($socket, base64_encode($usuario), array('334'))
+        && enviarComandoSmtp($socket, base64_encode($senha), array('235'))
+        && enviarComandoSmtp($socket, 'MAIL FROM:<' . $de . '>', array('250'))
+        && enviarComandoSmtp($socket, 'RCPT TO:<' . $para . '>', array('250', '251'))
+        && enviarComandoSmtp($socket, 'DATA', array('354'));
+
+    if (!$ok) {
+        @fwrite($socket, "QUIT\r\n");
+        fclose($socket);
+        return false;
+    }
+
+    $assuntoCodificado = '=?UTF-8?B?' . base64_encode($assunto) . '?=';
+    $corpo = "From: Controle de Técnicos <" . $de . ">\r\n";
+    $corpo .= "To: " . $para . "\r\n";
+    $corpo .= "Subject: " . $assuntoCodificado . "\r\n";
+    $corpo .= "MIME-Version: 1.0\r\n";
+    $corpo .= "Content-Type: text/plain; charset=UTF-8\r\n";
+    $corpo .= "Content-Transfer-Encoding: 8bit\r\n\r\n";
+    $corpo .= $mensagem . "\r\n.";
+
+    fwrite($socket, $corpo . "\r\n");
+    $respostaEnvio = lerRespostaSmtp($socket);
+    enviarComandoSmtp($socket, 'QUIT', array('221'));
+    fclose($socket);
+
+    return substr($respostaEnvio, 0, 3) === '250';
+}
+
+function verificarEnvioEmailsFerias($funcionarios, &$config, $arquivoConfigJson, $arquivoHistoricoJson) {
+    if (!isset($config['email_ferias_ativo']) || $config['email_ferias_ativo'] !== true) return;
+    if (empty($config['smtp_senha'])) return;
+
+    $hoje = new DateTime('today');
+    $dataAlvo = (clone $hoje)->modify('+5 days')->format('Y-m-d');
+    if (!isset($config['emails_ferias_enviados']) || !is_array($config['emails_ferias_enviados'])) {
+        $config['emails_ferias_enviados'] = array();
+    }
+
+    foreach ($funcionarios as $func) {
+        if (empty($func['ferias_inicio']) || $func['ferias_inicio'] !== $dataAlvo) continue;
+
+        $id = isset($func['id']) ? $func['id'] : md5(isset($func['nome']) ? $func['nome'] : '');
+        $chaveEnvio = $id . '_' . $func['ferias_inicio'];
+        if (!empty($config['emails_ferias_enviados'][$chaveEnvio])) continue;
+
+        $nomeTecnico = isset($func['nome']) ? $func['nome'] : 'Técnico';
+        $inicio = date('d/m/Y', strtotime($func['ferias_inicio']));
+        $fim = !empty($func['ferias_fim']) ? date('d/m/Y', strtotime($func['ferias_fim'])) : '--/--/----';
+        $assunto = 'ATENÇÃO; Técnico ' . $nomeTecnico . ' de férias a partir de ' . $inicio . '.';
+        $mensagem = 'Técnico ' . $nomeTecnico . ' irá sair de férias do dia ' . $inicio . ' até o dia ' . $fim . '.';
+
+        $enviado = enviarEmailSmtp(
+            'smtp.mls.com.br',
+            587,
+            'fernando.acesso',
+            $config['smtp_senha'],
+            'fernando.acesso@mls.com.br',
+            'acesso@mls.com.br',
+            $assunto,
+            $mensagem
+        );
+
+        if ($enviado) {
+            $config['emails_ferias_enviados'][$chaveEnvio] = date('Y-m-d H:i:s');
+            file_put_contents($arquivoConfigJson, json_encode($config, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+            registrarHistorico($arquivoHistoricoJson, 'sistema', 'Enviou e-mail de férias', $nomeTecnico . ' - início em ' . $inicio);
+        }
+    }
 }
 
 
@@ -525,8 +629,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // Ação: Configurações do admin
     if ($acao === 'salvar_config_filtro' && $isAdmin) {
         $config['filtro_usuarios'] = isset($_POST['filtro_usuarios']) && $_POST['filtro_usuarios'] === '1';
-        file_put_contents($arquivoConfigJson, json_encode($config));
-        registrarHistorico($arquivoHistoricoJson, $_SESSION['usuario'], 'Alterou configuração', 'Filtro para usuários: ' . ($config['filtro_usuarios'] ? 'Ativado' : 'Desativado'));
+        $config['email_ferias_ativo'] = isset($_POST['email_ferias_ativo']) && $_POST['email_ferias_ativo'] === '1';
+        if (isset($_POST['smtp_senha']) && trim($_POST['smtp_senha']) !== '') {
+            $config['smtp_senha'] = trim($_POST['smtp_senha']);
+        }
+        if (!isset($config['emails_ferias_enviados']) || !is_array($config['emails_ferias_enviados'])) {
+            $config['emails_ferias_enviados'] = array();
+        }
+        file_put_contents($arquivoConfigJson, json_encode($config, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+        registrarHistorico($arquivoHistoricoJson, $_SESSION['usuario'], 'Alterou configuração', 'Filtro para usuários: ' . ($config['filtro_usuarios'] ? 'Ativado' : 'Desativado') . ' | E-mails de férias: ' . ($config['email_ferias_ativo'] ? 'Ativado' : 'Desativado'));
         header("Location: index.php");
         exit;
     }
@@ -723,6 +834,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
 }
+
+verificarEnvioEmailsFerias($funcionarios, $config, $arquivoConfigJson, $arquivoHistoricoJson);
 ?>
 <!DOCTYPE html>
 <html lang="pt-PT">
@@ -836,9 +949,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         .filter-bar { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 15px; flex-wrap: wrap; }
         .filter-bar label { color: var(--text-muted); font-size: 14px; }
         .filter-select { width: auto; min-width: 190px; }
-        .filter-controls, .admin-filter-config { display: flex; align-items: center; gap: 10px; }
-        .admin-filter-config { background: var(--input-bg); border: 1px solid var(--border-color); border-radius: 4px; padding: 6px 8px; }
-        .admin-filter-config select { width: auto; padding: 6px; background-color: var(--input-bg); border: 1px solid var(--input-border); color: var(--text-color); border-radius: 4px; }
+        .filter-controls { display: flex; align-items: center; gap: 10px; }
+        .admin-filter-config { background: var(--input-bg); border: 1px solid var(--border-color); border-radius: 4px; padding: 6px 8px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+        .admin-filter-config select, .admin-filter-config input { width: auto; padding: 6px; background-color: var(--input-bg); border: 1px solid var(--input-border); color: var(--text-color); border-radius: 4px; }
+        .admin-filter-config input { min-width: 150px; }
         .btn-save-config { background-color: #455a64; padding: 6px 10px; font-size: 12px; }
         .history-list { display: flex; flex-direction: column; gap: 8px; max-height: 60vh; overflow-y: auto; }
         .history-item { background: var(--input-bg); border: 1px solid var(--border-color); border-radius: 6px; padding: 10px; }
@@ -902,6 +1016,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <option value="1" <?php echo $filtroUsuariosAtivo ? 'selected' : ''; ?>>Ativado</option>
                     <option value="0" <?php echo !$filtroUsuariosAtivo ? 'selected' : ''; ?>>Desativado</option>
                 </select>
+                <label for="email_ferias_ativo">Envio automático de e-mails</label>
+                <select id="email_ferias_ativo" name="email_ferias_ativo">
+                    <option value="1" <?php echo $emailFeriasAtivo ? 'selected' : ''; ?>>Ativado</option>
+                    <option value="0" <?php echo !$emailFeriasAtivo ? 'selected' : ''; ?>>Desativado</option>
+                </select>
+                <label for="smtp_senha">Senha SMTP</label>
+                <input type="password" id="smtp_senha" name="smtp_senha" placeholder="<?php echo empty($config['smtp_senha']) ? 'Obrigatória' : 'Senha salva'; ?>">
                 <button type="submit" class="btn btn-save-config"><i class="fa fa-save"></i> Salvar</button>
             </form>
         <?php endif; ?>
