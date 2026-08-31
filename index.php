@@ -56,6 +56,16 @@ if (!is_array($historico)) $historico = array();
 $filtroUsuariosAtivo = !isset($config['filtro_usuarios']) || $config['filtro_usuarios'] === true;
 $emailFeriasAtivo = isset($config['email_ferias_ativo']) && $config['email_ferias_ativo'] === true;
 $isAdmin = isset($_SESSION['usuario']) && $_SESSION['usuario'] === 'admin';
+$emailConfigPadrao = array(
+    'smtp_host' => 'smtp.mls.com.br',
+    'smtp_usuario' => 'fernando.acesso',
+    'smtp_porta' => '587',
+    'smtp_seguranca' => 'nenhuma',
+    'smtp_remetente' => 'fernando.acesso@mls.com.br',
+    'email_ferias_destinatario' => 'acesso@mls.com.br',
+    'email_destinatario_acesso' => 'acesso@mls.com.br',
+    'email_destinatario_redes' => 'redes@mls.com.br'
+);
 
 function registrarHistorico($arquivoHistoricoJson, $usuario, $acao, $detalhes = '') {
     $historico = json_decode(@file_get_contents($arquivoHistoricoJson), true);
@@ -97,6 +107,8 @@ function camposAlterados($antes, $depois) {
         'tipo_tecnico' => 'Tipo de técnico',
         'ferias_inicio' => 'Início das férias',
         'ferias_fim' => 'Retorno das férias',
+        'data_exame_medico' => 'Data exame médico',
+        'data_curso_nr35' => 'Data curso NR-35',
         'observacao' => 'Observação',
         'arquivo_aso' => 'Documento ASO',
         'arquivo_nr' => 'Documento NR',
@@ -191,10 +203,15 @@ function enviarComandoSmtp($socket, $comando, $codigosEsperados) {
     return in_array($codigo, $codigosEsperados, true);
 }
 
-function enviarEmailSmtp($host, $porta, $usuario, $senha, $de, $para, $assunto, $mensagem) {
+function valorConfigEmail($config, $padroes, $campo) {
+    return isset($config[$campo]) && trim((string)$config[$campo]) !== '' ? trim((string)$config[$campo]) : $padroes[$campo];
+}
+
+function enviarEmailSmtp($host, $porta, $usuario, $senha, $de, $para, $assunto, $mensagem, $seguranca = 'nenhuma') {
     if (empty($senha)) return false;
 
-    $socket = @fsockopen($host, $porta, $errno, $errstr, 20);
+    $destino = $seguranca === 'ssl' ? 'ssl://' . $host : $host;
+    $socket = @fsockopen($destino, (int)$porta, $errno, $errstr, 20);
     if (!$socket) return false;
 
     stream_set_timeout($socket, 20);
@@ -205,8 +222,23 @@ function enviarEmailSmtp($host, $porta, $usuario, $senha, $de, $para, $assunto, 
     }
 
     $nomeServidorLocal = isset($_SERVER['SERVER_NAME']) ? $_SERVER['SERVER_NAME'] : 'localhost';
-    $ok = enviarComandoSmtp($socket, 'EHLO ' . $nomeServidorLocal, array('250'))
-        && enviarComandoSmtp($socket, 'AUTH LOGIN', array('334'))
+    if (!enviarComandoSmtp($socket, 'EHLO ' . $nomeServidorLocal, array('250'))) {
+        fclose($socket);
+        return false;
+    }
+
+    if ($seguranca === 'starttls') {
+        if (!enviarComandoSmtp($socket, 'STARTTLS', array('220')) || !stream_socket_enable_crypto($socket, true, STREAM_CRYPTO_METHOD_TLS_CLIENT)) {
+            fclose($socket);
+            return false;
+        }
+        if (!enviarComandoSmtp($socket, 'EHLO ' . $nomeServidorLocal, array('250'))) {
+            fclose($socket);
+            return false;
+        }
+    }
+
+    $ok = enviarComandoSmtp($socket, 'AUTH LOGIN', array('334'))
         && enviarComandoSmtp($socket, base64_encode($usuario), array('334'))
         && enviarComandoSmtp($socket, base64_encode($senha), array('235'))
         && enviarComandoSmtp($socket, 'MAIL FROM:<' . $de . '>', array('250'))
@@ -236,45 +268,144 @@ function enviarEmailSmtp($host, $porta, $usuario, $senha, $de, $para, $assunto, 
     return substr($respostaEnvio, 0, 3) === '250';
 }
 
-function verificarEnvioEmailsFerias($funcionarios, &$config, $arquivoConfigJson, $arquivoHistoricoJson) {
+function destinatarioPorTipoTecnico($func, $config, $emailConfigPadrao) {
+    $tipoTecnico = isset($func['tipo_tecnico']) && $func['tipo_tecnico'] === 'redes' ? 'redes' : 'acesso';
+    $campo = $tipoTecnico === 'redes' ? 'email_destinatario_redes' : 'email_destinatario_acesso';
+    return valorConfigEmail($config, $emailConfigPadrao, $campo);
+}
+
+function enviarAvisoAutomatico($func, &$config, $arquivoConfigJson, $arquivoHistoricoJson, $emailConfigPadrao, $campoData, $campoControle, $tipoHistorico, $montarMensagem) {
+    if (empty($func[$campoData])) return;
+
+    $hoje = new DateTime('today');
+    $dataEvento = DateTime::createFromFormat('Y-m-d', $func[$campoData]);
+    if (!$dataEvento) return;
+    $dataEvento->setTime(0, 0, 0);
+
+    $diasAteEvento = (int)$hoje->diff($dataEvento)->format('%r%a');
+    if ($diasAteEvento < 1 || $diasAteEvento > 5) return;
+
+    if (!isset($config[$campoControle]) || !is_array($config[$campoControle])) {
+        $config[$campoControle] = array();
+    }
+
+    $id = isset($func['id']) ? $func['id'] : md5(isset($func['nome']) ? $func['nome'] : '');
+    $chaveEnvio = $id . '_' . $func[$campoData];
+    if (!empty($config[$campoControle][$chaveEnvio])) return;
+
+    $nomeTecnico = isset($func['nome']) ? $func['nome'] : 'Técnico';
+    $dadosMensagem = $montarMensagem($func, $diasAteEvento);
+
+    $enviado = enviarEmailSmtp(
+        valorConfigEmail($config, $emailConfigPadrao, 'smtp_host'),
+        valorConfigEmail($config, $emailConfigPadrao, 'smtp_porta'),
+        valorConfigEmail($config, $emailConfigPadrao, 'smtp_usuario'),
+        $config['smtp_senha'],
+        valorConfigEmail($config, $emailConfigPadrao, 'smtp_remetente'),
+        destinatarioPorTipoTecnico($func, $config, $emailConfigPadrao),
+        $dadosMensagem['assunto'],
+        $dadosMensagem['mensagem'],
+        valorConfigEmail($config, $emailConfigPadrao, 'smtp_seguranca')
+    );
+
+    if ($enviado) {
+        $config[$campoControle][$chaveEnvio] = date('Y-m-d H:i:s');
+        file_put_contents($arquivoConfigJson, json_encode($config, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+        registrarHistorico($arquivoHistoricoJson, 'sistema', $tipoHistorico, $nomeTecnico . ' - data em ' . date('d/m/Y', strtotime($func[$campoData])));
+    }
+}
+
+function enviarAvisoAutomaticoComRepeticoes($func, &$config, $arquivoConfigJson, $arquivoHistoricoJson, $emailConfigPadrao, $campoData, $campoControle, $tipoHistorico, $montarMensagem) {
+    if (empty($func[$campoData])) return;
+
+    $hoje = new DateTime('today');
+    $dataEvento = DateTime::createFromFormat('Y-m-d', $func[$campoData]);
+    if (!$dataEvento) return;
+    $dataEvento->setTime(0, 0, 0);
+
+    $diasAteEvento = (int)$hoje->diff($dataEvento)->format('%r%a');
+    if ($diasAteEvento < 1 || $diasAteEvento > 5) return;
+
+    $repeticao = $diasAteEvento === 1 ? '1dia' : '5a2';
+
+    if (!isset($config[$campoControle]) || !is_array($config[$campoControle])) {
+        $config[$campoControle] = array();
+    }
+
+    $id = isset($func['id']) ? $func['id'] : md5(isset($func['nome']) ? $func['nome'] : '');
+    $chaveEnvio = $id . '_' . $func[$campoData] . '_' . $repeticao;
+    if (!empty($config[$campoControle][$chaveEnvio])) return;
+
+    $nomeTecnico = isset($func['nome']) ? $func['nome'] : 'Técnico';
+    $dadosMensagem = $montarMensagem($func, $diasAteEvento);
+
+    $enviado = enviarEmailSmtp(
+        valorConfigEmail($config, $emailConfigPadrao, 'smtp_host'),
+        valorConfigEmail($config, $emailConfigPadrao, 'smtp_porta'),
+        valorConfigEmail($config, $emailConfigPadrao, 'smtp_usuario'),
+        $config['smtp_senha'],
+        valorConfigEmail($config, $emailConfigPadrao, 'smtp_remetente'),
+        destinatarioPorTipoTecnico($func, $config, $emailConfigPadrao),
+        $dadosMensagem['assunto'],
+        $dadosMensagem['mensagem'],
+        valorConfigEmail($config, $emailConfigPadrao, 'smtp_seguranca')
+    );
+
+    if ($enviado) {
+        $config[$campoControle][$chaveEnvio] = date('Y-m-d H:i:s');
+        file_put_contents($arquivoConfigJson, json_encode($config, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+        registrarHistorico($arquivoHistoricoJson, 'sistema', $tipoHistorico, $nomeTecnico . ' - data em ' . date('d/m/Y', strtotime($func[$campoData])) . ' - falta ' . $diasAteEvento . ' dia' . ($diasAteEvento === 1 ? '' : 's'));
+    }
+}
+
+function limparMarcadoresEmailPorData(&$config, $campoControle, $id, $data) {
+    if (empty($data) || !isset($config[$campoControle]) || !is_array($config[$campoControle])) return false;
+
+    $alterou = false;
+    $prefixo = $id . '_' . $data;
+    foreach (array_keys($config[$campoControle]) as $chave) {
+        if ($chave === $prefixo || strpos($chave, $prefixo . '_') === 0) {
+            unset($config[$campoControle][$chave]);
+            $alterou = true;
+        }
+    }
+    return $alterou;
+}
+
+function verificarEnvioEmailsFerias($funcionarios, &$config, $arquivoConfigJson, $arquivoHistoricoJson, $emailConfigPadrao) {
     if (!isset($config['email_ferias_ativo']) || $config['email_ferias_ativo'] !== true) return;
     if (empty($config['smtp_senha'])) return;
 
-    $hoje = new DateTime('today');
-    $dataAlvo = (clone $hoje)->modify('+5 days')->format('Y-m-d');
     if (!isset($config['emails_ferias_enviados']) || !is_array($config['emails_ferias_enviados'])) {
         $config['emails_ferias_enviados'] = array();
     }
 
     foreach ($funcionarios as $func) {
-        if (empty($func['ferias_inicio']) || $func['ferias_inicio'] !== $dataAlvo) continue;
-
-        $id = isset($func['id']) ? $func['id'] : md5(isset($func['nome']) ? $func['nome'] : '');
-        $chaveEnvio = $id . '_' . $func['ferias_inicio'];
-        if (!empty($config['emails_ferias_enviados'][$chaveEnvio])) continue;
-
-        $nomeTecnico = isset($func['nome']) ? $func['nome'] : 'Técnico';
-        $inicio = date('d/m/Y', strtotime($func['ferias_inicio']));
-        $fim = !empty($func['ferias_fim']) ? date('d/m/Y', strtotime($func['ferias_fim'])) : '--/--/----';
-        $assunto = 'ATENÇÃO; Técnico ' . $nomeTecnico . ' de férias a partir de ' . $inicio . '.';
-        $mensagem = 'Técnico ' . $nomeTecnico . ' irá sair de férias do dia ' . $inicio . ' até o dia ' . $fim . '.';
-
-        $enviado = enviarEmailSmtp(
-            'smtp.mls.com.br',
-            587,
-            'fernando.acesso',
-            $config['smtp_senha'],
-            'fernando.acesso@mls.com.br',
-            'acesso@mls.com.br',
-            $assunto,
-            $mensagem
-        );
-
-        if ($enviado) {
-            $config['emails_ferias_enviados'][$chaveEnvio] = date('Y-m-d H:i:s');
-            file_put_contents($arquivoConfigJson, json_encode($config, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
-            registrarHistorico($arquivoHistoricoJson, 'sistema', 'Enviou e-mail de férias', $nomeTecnico . ' - início em ' . $inicio);
-        }
+        enviarAvisoAutomatico($func, $config, $arquivoConfigJson, $arquivoHistoricoJson, $emailConfigPadrao, 'ferias_inicio', 'emails_ferias_enviados', 'Enviou e-mail de férias', function($func) {
+            $nomeTecnico = isset($func['nome']) ? $func['nome'] : 'Técnico';
+            $inicio = date('d/m/Y', strtotime($func['ferias_inicio']));
+            $fim = !empty($func['ferias_fim']) ? date('d/m/Y', strtotime($func['ferias_fim'])) : '--/--/----';
+            return array(
+                'assunto' => 'ATENÇÃO; Técnico ' . $nomeTecnico . ' de férias a partir de ' . $inicio . '.',
+                'mensagem' => 'Técnico ' . $nomeTecnico . ' irá sair de férias do dia ' . $inicio . ' até o dia ' . $fim . '.'
+            );
+        });
+        enviarAvisoAutomaticoComRepeticoes($func, $config, $arquivoConfigJson, $arquivoHistoricoJson, $emailConfigPadrao, 'data_exame_medico', 'emails_exame_medico_enviados', 'Enviou e-mail de exame médico', function($func, $diasAteEvento) {
+            $nomeTecnico = isset($func['nome']) ? $func['nome'] : 'Técnico';
+            $data = date('d/m/Y', strtotime($func['data_exame_medico']));
+            return array(
+                'assunto' => 'Técnico ' . $nomeTecnico . ' - Exame médico - falta ' . $diasAteEvento . ' dia' . ($diasAteEvento === 1 ? '' : 's'),
+                'mensagem' => 'Prezados, técnico ' . $nomeTecnico . ' irá fazer o exame periódico no dia ' . $data . '.'
+            );
+        });
+        enviarAvisoAutomaticoComRepeticoes($func, $config, $arquivoConfigJson, $arquivoHistoricoJson, $emailConfigPadrao, 'data_curso_nr35', 'emails_curso_nr35_enviados', 'Enviou e-mail de curso NR-35', function($func, $diasAteEvento) {
+            $nomeTecnico = isset($func['nome']) ? $func['nome'] : 'Técnico';
+            $data = date('d/m/Y', strtotime($func['data_curso_nr35']));
+            return array(
+                'assunto' => 'Técnico ' . $nomeTecnico . ' - Curso NR-35 - falta ' . $diasAteEvento . ' dia' . ($diasAteEvento === 1 ? '' : 's'),
+                'mensagem' => 'Prezados, técnico ' . $nomeTecnico . ' irá fazer o curso do NR-35 no dia ' . $data . '.'
+            );
+        });
     }
 }
 
@@ -561,6 +692,8 @@ if (isset($_GET['action']) && $_GET['action'] === 'exportar_excel') {
         'Documento CNH',
         'Início das Férias',
         'Retorno das Férias',
+        'Data Exame Médico',
+        'Data Curso NR-35',
         'Observação'
     ), ';');
 
@@ -587,6 +720,8 @@ if (isset($_GET['action']) && $_GET['action'] === 'exportar_excel') {
             isset($func['arquivo_cnh']) ? $func['arquivo_cnh'] : '',
             isset($func['ferias_inicio']) ? $func['ferias_inicio'] : '',
             isset($func['ferias_fim']) ? $func['ferias_fim'] : '',
+            isset($func['data_exame_medico']) ? $func['data_exame_medico'] : '',
+            isset($func['data_curso_nr35']) ? $func['data_curso_nr35'] : '',
             isset($func['observacao']) ? $func['observacao'] : ''
         ), ';');
     }
@@ -630,11 +765,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($acao === 'salvar_config_filtro' && $isAdmin) {
         $config['filtro_usuarios'] = isset($_POST['filtro_usuarios']) && $_POST['filtro_usuarios'] === '1';
         $config['email_ferias_ativo'] = isset($_POST['email_ferias_ativo']) && $_POST['email_ferias_ativo'] === '1';
+        $config['smtp_host'] = isset($_POST['smtp_host']) && trim($_POST['smtp_host']) !== '' ? trim($_POST['smtp_host']) : $emailConfigPadrao['smtp_host'];
+        $config['smtp_usuario'] = isset($_POST['smtp_usuario']) && trim($_POST['smtp_usuario']) !== '' ? trim($_POST['smtp_usuario']) : $emailConfigPadrao['smtp_usuario'];
+        $config['smtp_porta'] = isset($_POST['smtp_porta']) && trim($_POST['smtp_porta']) !== '' ? trim($_POST['smtp_porta']) : $emailConfigPadrao['smtp_porta'];
+        $config['smtp_seguranca'] = isset($_POST['smtp_seguranca']) && in_array($_POST['smtp_seguranca'], array('nenhuma', 'starttls', 'ssl'), true) ? $_POST['smtp_seguranca'] : $emailConfigPadrao['smtp_seguranca'];
+        $config['smtp_remetente'] = isset($_POST['smtp_remetente']) && trim($_POST['smtp_remetente']) !== '' ? trim($_POST['smtp_remetente']) : $emailConfigPadrao['smtp_remetente'];
+        $config['email_ferias_destinatario'] = isset($_POST['email_ferias_destinatario']) && trim($_POST['email_ferias_destinatario']) !== '' ? trim($_POST['email_ferias_destinatario']) : $emailConfigPadrao['email_ferias_destinatario'];
+        $config['email_destinatario_acesso'] = isset($_POST['email_destinatario_acesso']) && trim($_POST['email_destinatario_acesso']) !== '' ? trim($_POST['email_destinatario_acesso']) : $emailConfigPadrao['email_destinatario_acesso'];
+        $config['email_destinatario_redes'] = isset($_POST['email_destinatario_redes']) && trim($_POST['email_destinatario_redes']) !== '' ? trim($_POST['email_destinatario_redes']) : $emailConfigPadrao['email_destinatario_redes'];
         if (isset($_POST['smtp_senha']) && trim($_POST['smtp_senha']) !== '') {
             $config['smtp_senha'] = trim($_POST['smtp_senha']);
         }
         if (!isset($config['emails_ferias_enviados']) || !is_array($config['emails_ferias_enviados'])) {
             $config['emails_ferias_enviados'] = array();
+        }
+        if (!isset($config['emails_exame_medico_enviados']) || !is_array($config['emails_exame_medico_enviados'])) {
+            $config['emails_exame_medico_enviados'] = array();
+        }
+        if (!isset($config['emails_curso_nr35_enviados']) || !is_array($config['emails_curso_nr35_enviados'])) {
+            $config['emails_curso_nr35_enviados'] = array();
         }
         file_put_contents($arquivoConfigJson, json_encode($config, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
         registrarHistorico($arquivoHistoricoJson, $_SESSION['usuario'], 'Alterou configuração', 'Filtro para usuários: ' . ($config['filtro_usuarios'] ? 'Ativado' : 'Desativado') . ' | E-mails de férias: ' . ($config['email_ferias_ativo'] ? 'Ativado' : 'Desativado'));
@@ -692,6 +841,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'tipo_tecnico' => '',
                     'ferias_inicio' => '',
                     'ferias_fim' => '',
+                    'data_exame_medico' => '',
+                    'data_curso_nr35' => '',
                     'observacao' => '',
                     'arquivo_aso' => '',
                     'arquivo_nr' => '',
@@ -734,6 +885,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'tipo_tecnico' => isset($_POST['tipo_tecnico']) ? $_POST['tipo_tecnico'] : 'acesso',
             'ferias_inicio' => isset($_POST['ferias_inicio']) ? $_POST['ferias_inicio'] : '',
             'ferias_fim' => isset($_POST['ferias_fim']) ? $_POST['ferias_fim'] : '',
+            'data_exame_medico' => isset($_POST['data_exame_medico']) ? $_POST['data_exame_medico'] : '',
+            'data_curso_nr35' => isset($_POST['data_curso_nr35']) ? $_POST['data_curso_nr35'] : '',
             'observacao' => isset($_POST['observacao']) ? trim($_POST['observacao']) : '',
             'arquivo_aso' => isset($_POST['arquivo_aso_atual']) ? $_POST['arquivo_aso_atual'] : '',
             'arquivo_nr' => isset($_POST['arquivo_nr_atual']) ? $_POST['arquivo_nr_atual'] : '',
@@ -752,6 +905,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $novaCnh = processarDocumento($_FILES['foto_cnh'], 'cnh', $id, $diretorioUploads);
         if ($novaCnh !== null) $dados['arquivo_cnh'] = $novaCnh;
+
+        if (is_array($dadosAntes)) {
+            $camposControleEmail = array(
+                'ferias_inicio' => 'emails_ferias_enviados',
+                'data_exame_medico' => 'emails_exame_medico_enviados',
+                'data_curso_nr35' => 'emails_curso_nr35_enviados'
+            );
+            $configEmailAlterada = false;
+            foreach ($camposControleEmail as $campoData => $campoControle) {
+                $dataAntes = isset($dadosAntes[$campoData]) ? $dadosAntes[$campoData] : '';
+                if ($dataAntes !== $dados[$campoData] && limparMarcadoresEmailPorData($config, $campoControle, $id, $dataAntes)) {
+                    $configEmailAlterada = true;
+                }
+            }
+            if ($configEmailAlterada) {
+                file_put_contents($arquivoConfigJson, json_encode($config, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+            }
+        }
 
         $encontrou = false;
         foreach ($funcionarios as $key => $func) {
@@ -782,6 +953,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         foreach ($funcionarios as $key => $func) {
             if ($func['id'] === $id) {
                 $nomeExcluido = isset($func['nome']) ? $func['nome'] : $id;
+                $camposControleEmail = array(
+                    'ferias_inicio' => 'emails_ferias_enviados',
+                    'data_exame_medico' => 'emails_exame_medico_enviados',
+                    'data_curso_nr35' => 'emails_curso_nr35_enviados'
+                );
+                $configEmailAlterada = false;
+                foreach ($camposControleEmail as $campoData => $campoControle) {
+                    if (limparMarcadoresEmailPorData($config, $campoControle, $id, isset($func[$campoData]) ? $func[$campoData] : '')) {
+                        $configEmailAlterada = true;
+                    }
+                }
+                if ($configEmailAlterada) {
+                    file_put_contents($arquivoConfigJson, json_encode($config, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+                }
                 if (!empty($func['arquivo_aso']) && file_exists($diretorioUploads . $func['arquivo_aso'])) @unlink($diretorioUploads . $func['arquivo_aso']);
                 if (!empty($func['arquivo_nr']) && file_exists($diretorioUploads . $func['arquivo_nr'])) @unlink($diretorioUploads . $func['arquivo_nr']);
                 if (!empty($func['arquivo_cnh']) && file_exists($diretorioUploads . $func['arquivo_cnh'])) @unlink($diretorioUploads . $func['arquivo_cnh']);
@@ -835,7 +1020,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-verificarEnvioEmailsFerias($funcionarios, $config, $arquivoConfigJson, $arquivoHistoricoJson);
+verificarEnvioEmailsFerias($funcionarios, $config, $arquivoConfigJson, $arquivoHistoricoJson, $emailConfigPadrao);
 ?>
 <!DOCTYPE html>
 <html lang="pt-PT">
@@ -941,6 +1126,10 @@ verificarEnvioEmailsFerias($funcionarios, $config, $arquivoConfigJson, $arquivoH
         .form-group label { display: block; margin-bottom: 5px; font-size: 14px; color: var(--text-color); }
         .form-group input, .form-group select, .form-group textarea, .filter-select { width: 100%; padding: 8px; background-color: var(--input-bg); border: 1px solid var(--input-border); color: var(--text-color); border-radius: 4px; box-sizing: border-box; }
         .form-group textarea { min-height: 80px; resize: vertical; font-family: inherit; }
+        .date-clear-wrap { position: relative; }
+        .date-clear-wrap input[type="date"] { padding-right: 54px; }
+        .btn-clear-date { position: absolute; right: 30px; top: 50%; transform: translateY(-50%); width: 20px; height: 20px; padding: 0; border: none; background: transparent; color: #f44336; font-size: 18px; line-height: 20px; font-weight: 800; cursor: pointer; z-index: 2; }
+        .btn-clear-date:hover { color: #b71c1c; }
         .form-row { display: flex; gap: 10px; }
         .form-row .form-group { flex: 1; }
         .modal-footer { margin-top: 20px; text-align: right; }
@@ -1021,6 +1210,25 @@ verificarEnvioEmailsFerias($funcionarios, $config, $arquivoConfigJson, $arquivoH
                     <option value="1" <?php echo $emailFeriasAtivo ? 'selected' : ''; ?>>Ativado</option>
                     <option value="0" <?php echo !$emailFeriasAtivo ? 'selected' : ''; ?>>Desativado</option>
                 </select>
+                <label for="smtp_host">Servidor SMTP</label>
+                <input type="text" id="smtp_host" name="smtp_host" value="<?php echo htmlspecialchars(valorConfigEmail($config, $emailConfigPadrao, 'smtp_host')); ?>">
+                <label for="smtp_usuario">Usuário SMTP</label>
+                <input type="text" id="smtp_usuario" name="smtp_usuario" value="<?php echo htmlspecialchars(valorConfigEmail($config, $emailConfigPadrao, 'smtp_usuario')); ?>">
+                <label for="smtp_porta">Porta</label>
+                <input type="number" id="smtp_porta" name="smtp_porta" min="1" max="65535" value="<?php echo htmlspecialchars(valorConfigEmail($config, $emailConfigPadrao, 'smtp_porta')); ?>">
+                <label for="smtp_seguranca">Segurança</label>
+                <?php $smtpSegurancaAtual = valorConfigEmail($config, $emailConfigPadrao, 'smtp_seguranca'); ?>
+                <select id="smtp_seguranca" name="smtp_seguranca">
+                    <option value="nenhuma" <?php echo $smtpSegurancaAtual === 'nenhuma' ? 'selected' : ''; ?>>Nenhuma</option>
+                    <option value="starttls" <?php echo $smtpSegurancaAtual === 'starttls' ? 'selected' : ''; ?>>STARTTLS</option>
+                    <option value="ssl" <?php echo $smtpSegurancaAtual === 'ssl' ? 'selected' : ''; ?>>SSL/TLS</option>
+                </select>
+                <label for="smtp_remetente">Remetente</label>
+                <input type="email" id="smtp_remetente" name="smtp_remetente" value="<?php echo htmlspecialchars(valorConfigEmail($config, $emailConfigPadrao, 'smtp_remetente')); ?>">
+                <label for="email_destinatario_acesso">E-mail acesso</label>
+                <input type="email" id="email_destinatario_acesso" name="email_destinatario_acesso" value="<?php echo htmlspecialchars(valorConfigEmail($config, $emailConfigPadrao, 'email_destinatario_acesso')); ?>">
+                <label for="email_destinatario_redes">E-mail redes</label>
+                <input type="email" id="email_destinatario_redes" name="email_destinatario_redes" value="<?php echo htmlspecialchars(valorConfigEmail($config, $emailConfigPadrao, 'email_destinatario_redes')); ?>">
                 <label for="smtp_senha">Senha SMTP</label>
                 <input type="password" id="smtp_senha" name="smtp_senha" placeholder="<?php echo empty($config['smtp_senha']) ? 'Obrigatória' : 'Senha salva'; ?>">
                 <button type="submit" class="btn btn-save-config"><i class="fa fa-save"></i> Salvar</button>
@@ -1036,13 +1244,15 @@ verificarEnvioEmailsFerias($funcionarios, $config, $arquivoConfigJson, $arquivoH
                 <th>NR</th>
                 <th>CNH</th>
                 <th>Férias</th>
+                <th>Exame Médico</th>
+                <th>Curso NR-35</th>
                 <th>Observação</th>
                 <th>Ação</th>
             </tr>
         </thead>
         <tbody>
             <?php if(empty($funcionarios)): ?>
-                <tr><td colspan="7" style="text-align:center; color:var(--text-muted);">Nenhum técnico registado.</td></tr>
+                <tr><td colspan="9" style="text-align:center; color:var(--text-muted);">Nenhum técnico registado.</td></tr>
             <?php endif; ?>
             <?php
                 $funcionariosOrdenados = $funcionarios;
@@ -1124,6 +1334,20 @@ verificarEnvioEmailsFerias($funcionarios, $config, $arquivoConfigJson, $arquivoH
                             <small>até</small>
                             <?php echo !empty($feriasFim) ? htmlspecialchars(date('d/m/Y', strtotime($feriasFim))) : '--/--/----'; ?>
                         </span>
+                    <?php else: ?>
+                        <span class="btn btn-none">-</span>
+                    <?php endif; ?>
+                </td>
+                <td>
+                    <?php if (!empty($func['data_exame_medico'])): ?>
+                        <span class="vacation-dates"><i class="fa fa-stethoscope"></i><?php echo htmlspecialchars(date('d/m/Y', strtotime($func['data_exame_medico']))); ?></span>
+                    <?php else: ?>
+                        <span class="btn btn-none">-</span>
+                    <?php endif; ?>
+                </td>
+                <td>
+                    <?php if (!empty($func['data_curso_nr35'])): ?>
+                        <span class="vacation-dates"><i class="fa fa-person-chalkboard"></i><?php echo htmlspecialchars(date('d/m/Y', strtotime($func['data_curso_nr35']))); ?></span>
                     <?php else: ?>
                         <span class="btn btn-none">-</span>
                     <?php endif; ?>
@@ -1338,11 +1562,34 @@ verificarEnvioEmailsFerias($funcionarios, $config, $arquivoConfigJson, $arquivoH
             <div class="form-row">
                 <div class="form-group">
                     <label>Início das Férias</label>
-                    <input type="date" name="ferias_inicio" id="ferias_inicio">
+                    <div class="date-clear-wrap">
+                        <input type="date" name="ferias_inicio" id="ferias_inicio">
+                        <button type="button" class="btn-clear-date" onclick="clearDateField('ferias_inicio')" title="Limpar data" aria-label="Limpar data">&times;</button>
+                    </div>
                 </div>
                 <div class="form-group">
                     <label>Final das Férias</label>
-                    <input type="date" name="ferias_fim" id="ferias_fim">
+                    <div class="date-clear-wrap">
+                        <input type="date" name="ferias_fim" id="ferias_fim">
+                        <button type="button" class="btn-clear-date" onclick="clearDateField('ferias_fim')" title="Limpar data" aria-label="Limpar data">&times;</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Data Exame Médico</label>
+                    <div class="date-clear-wrap">
+                        <input type="date" name="data_exame_medico" id="data_exame_medico">
+                        <button type="button" class="btn-clear-date" onclick="clearDateField('data_exame_medico')" title="Limpar data" aria-label="Limpar data">&times;</button>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Data Curso NR-35</label>
+                    <div class="date-clear-wrap">
+                        <input type="date" name="data_curso_nr35" id="data_curso_nr35">
+                        <button type="button" class="btn-clear-date" onclick="clearDateField('data_curso_nr35')" title="Limpar data" aria-label="Limpar data">&times;</button>
+                    </div>
                 </div>
             </div>
 
@@ -1468,7 +1715,9 @@ verificarEnvioEmailsFerias($funcionarios, $config, $arquivoConfigJson, $arquivoH
         const tipoTecnico = func.tipo_tecnico === 'redes' ? 'Técnico de redes' : 'Técnico de acesso';
         const feriasInicio = formatDateBr(func.ferias_inicio);
         const feriasFim = formatDateBr(func.ferias_fim);
-        currentInfoText = `Nome: ${func.nome}\nNome da Mãe: ${func.nome_mae || 'N/A'}\nTipo: ${tipoTecnico}\nRG: ${func.rg}\nCPF: ${func.cpf}\nE-mail Pessoal: ${func.email_pessoal || 'N/A'}\nE-mail Empresarial: ${func.email_empresarial || 'N/A'}\nTel Empresarial: ${func.tel_empresarial || 'N/A'}\nTel Contacto: ${func.tel_contato}\nFérias: ${feriasInicio} até ${feriasFim}\nObservação: ${func.observacao || 'N/A'}\nContacto de Emergência: ${func.contato_emergencia} (${func.tel_emergencia})`;
+        const dataExameMedico = formatDateBr(func.data_exame_medico);
+        const dataCursoNr35 = formatDateBr(func.data_curso_nr35);
+        currentInfoText = `Nome: ${func.nome}\nNome da Mãe: ${func.nome_mae || 'N/A'}\nTipo: ${tipoTecnico}\nRG: ${func.rg}\nCPF: ${func.cpf}\nE-mail Pessoal: ${func.email_pessoal || 'N/A'}\nE-mail Empresarial: ${func.email_empresarial || 'N/A'}\nTel Empresarial: ${func.tel_empresarial || 'N/A'}\nTel Contacto: ${func.tel_contato}\nFérias: ${feriasInicio} até ${feriasFim}\nExame Médico: ${dataExameMedico}\nCurso NR-35: ${dataCursoNr35}\nObservação: ${func.observacao || 'N/A'}\nContacto de Emergência: ${func.contato_emergencia} (${func.tel_emergencia})`;
 
         infoViewerContent.innerHTML = `
             <p style="margin: 5px 0;"><strong>Nome:</strong> <span style="color:var(--text-strong);">${func.nome}</span></p>
@@ -1481,6 +1730,8 @@ verificarEnvioEmailsFerias($funcionarios, $config, $arquivoConfigJson, $arquivoH
             <p style="margin: 5px 0;"><strong>Tel Empresarial:</strong> <span style="color:var(--text-strong);">${func.tel_empresarial || '-'}</span></p>
             <p style="margin: 5px 0;"><strong>Tel Contacto:</strong> <span style="color:var(--text-strong);">${func.tel_contato}</span></p>
             <p style="margin: 5px 0;"><strong>Férias:</strong> <span style="color:var(--text-strong);">${feriasInicio} até ${feriasFim}</span></p>
+            <p style="margin: 5px 0;"><strong>Exame Médico:</strong> <span style="color:var(--text-strong);">${dataExameMedico}</span></p>
+            <p style="margin: 5px 0;"><strong>Curso NR-35:</strong> <span style="color:var(--text-strong);">${dataCursoNr35}</span></p>
             <p style="margin: 5px 0;"><strong>Observação:</strong> <span style="color:var(--text-strong);">${func.observacao || '-'}</span></p>
             <div style="margin-top:15px; padding-top:10px; border-top: 1px solid var(--border-color);">
                 <strong style="color:var(--accent-orange);">Contacto de Emergência:</strong><br>
@@ -1495,6 +1746,11 @@ verificarEnvioEmailsFerias($funcionarios, $config, $arquivoConfigJson, $arquivoH
         const parts = value.split('-');
         if (parts.length !== 3) return value;
         return `${parts[2]}/${parts[1]}/${parts[0]}`;
+    }
+
+    function clearDateField(fieldId) {
+        const field = document.getElementById(fieldId);
+        if (field) field.value = '';
     }
 
     function closeInfoView() {
@@ -1567,6 +1823,8 @@ verificarEnvioEmailsFerias($funcionarios, $config, $arquivoConfigJson, $arquivoH
         document.getElementById('tipo_tecnico').value = func.tipo_tecnico || 'acesso';
         document.getElementById('ferias_inicio').value = func.ferias_inicio || '';
         document.getElementById('ferias_fim').value = func.ferias_fim || '';
+        document.getElementById('data_exame_medico').value = func.data_exame_medico || '';
+        document.getElementById('data_curso_nr35').value = func.data_curso_nr35 || '';
         document.getElementById('observacao').value = func.observacao || '';
         document.getElementById('tel_empresarial').value = func.tel_empresarial;
         document.getElementById('tel_contato').value = func.tel_contato;
