@@ -110,6 +110,69 @@ function camposAlterados($antes, $depois) {
     return $alterados;
 }
 
+function adicionarDiretorioAoZip($zip, $diretorioBase, $diretorioAtual, $prefixoZip) {
+    if (!is_dir($diretorioAtual)) return;
+
+    $itens = scandir($diretorioAtual);
+    if (!is_array($itens)) return;
+
+    foreach ($itens as $item) {
+        if ($item === '.' || $item === '..') continue;
+
+        $caminhoCompleto = $diretorioAtual . DIRECTORY_SEPARATOR . $item;
+        $caminhoRelativo = ltrim(str_replace($diretorioBase, '', $caminhoCompleto), DIRECTORY_SEPARATOR);
+        $nomeNoZip = rtrim($prefixoZip, '/') . '/' . str_replace(DIRECTORY_SEPARATOR, '/', $caminhoRelativo);
+
+        if (is_dir($caminhoCompleto)) {
+            $zip->addEmptyDir($nomeNoZip);
+            adicionarDiretorioAoZip($zip, $diretorioBase, $caminhoCompleto, $prefixoZip);
+        } elseif (is_file($caminhoCompleto)) {
+            $zip->addFile($caminhoCompleto, $nomeNoZip);
+        }
+    }
+}
+
+function copiarDiretorio($origem, $destino) {
+    if (!is_dir($origem)) return;
+    if (!is_dir($destino)) @mkdir($destino, 0777, true);
+
+    $itens = scandir($origem);
+    if (!is_array($itens)) return;
+
+    foreach ($itens as $item) {
+        if ($item === '.' || $item === '..') continue;
+
+        $caminhoOrigem = $origem . DIRECTORY_SEPARATOR . $item;
+        $caminhoDestino = $destino . DIRECTORY_SEPARATOR . $item;
+
+        if (is_dir($caminhoOrigem)) {
+            copiarDiretorio($caminhoOrigem, $caminhoDestino);
+        } elseif (is_file($caminhoOrigem)) {
+            @copy($caminhoOrigem, $caminhoDestino);
+        }
+    }
+}
+
+function excluirDiretorio($diretorio) {
+    if (!is_dir($diretorio)) return;
+
+    $itens = scandir($diretorio);
+    if (is_array($itens)) {
+        foreach ($itens as $item) {
+            if ($item === '.' || $item === '..') continue;
+
+            $caminho = $diretorio . DIRECTORY_SEPARATOR . $item;
+            if (is_dir($caminho)) {
+                excluirDiretorio($caminho);
+            } else {
+                @unlink($caminho);
+            }
+        }
+    }
+
+    @rmdir($diretorio);
+}
+
 
 // --- LOGIC: LOGOUT ---
 if (isset($_GET['action']) && $_GET['action'] === 'logout') {
@@ -256,6 +319,92 @@ if (isset($_GET['action']) && $_GET['action'] === 'registrar_doc_click') {
     $nomeTecnico = nomeTecnicoPorId($funcionarios, $idTecnico);
     registrarHistorico($arquivoHistoricoJson, $_SESSION['usuario'], 'Visualizou documento', $tipoDoc . ' de ' . $nomeTecnico);
     http_response_code(204);
+    exit;
+}
+
+// --- BACKUP: JSONS, FOTOS E DOCUMENTOS (APENAS ADMIN PRINCIPAL) ---
+if (isset($_GET['action']) && $_GET['action'] === 'baixar_backup') {
+    if (!$isAdmin) {
+        http_response_code(403);
+        echo 'Acesso negado.';
+        exit;
+    }
+
+    registrarHistorico($arquivoHistoricoJson, $_SESSION['usuario'], 'Baixou backup', 'Baixou JSONs, fotos e documentos');
+
+    $arquivosJson = array(
+        'data.json' => $arquivoJson,
+        'users.json' => $arquivoUsuariosJson,
+        'config.json' => $arquivoConfigJson,
+        'history.json' => $arquivoHistoricoJson
+    );
+    $dataBackup = date('Y-m-d_H-i-s');
+    $nomeArquivo = 'backup_tecnicos_' . $dataBackup . '.zip';
+    $tipoConteudo = 'application/zip';
+    $arquivoTemporario = tempnam(sys_get_temp_dir(), 'backup_tecnicos_');
+
+    if (class_exists('ZipArchive')) {
+        $zip = new ZipArchive();
+
+        if ($arquivoTemporario === false || $zip->open($arquivoTemporario, ZipArchive::OVERWRITE) !== true) {
+            http_response_code(500);
+            echo 'Não foi possível gerar o backup.';
+            exit;
+        }
+
+        foreach ($arquivosJson as $nomeNoZip => $caminhoArquivo) {
+            if (is_file($caminhoArquivo)) {
+                $zip->addFile($caminhoArquivo, 'json/' . $nomeNoZip);
+            }
+        }
+
+        adicionarDiretorioAoZip($zip, rtrim($diretorioUploads, DIRECTORY_SEPARATOR), $diretorioUploads, 'uploads');
+        $zip->close();
+    } elseif (class_exists('PharData')) {
+        if ($arquivoTemporario !== false) @unlink($arquivoTemporario);
+
+        $baseTemporaria = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'backup_tecnicos_' . uniqid();
+        $pastaJson = $baseTemporaria . DIRECTORY_SEPARATOR . 'json';
+        @mkdir($pastaJson, 0777, true);
+
+        foreach ($arquivosJson as $nomeArquivoJson => $caminhoArquivo) {
+            if (is_file($caminhoArquivo)) {
+                @copy($caminhoArquivo, $pastaJson . DIRECTORY_SEPARATOR . $nomeArquivoJson);
+            }
+        }
+
+        copiarDiretorio($diretorioUploads, $baseTemporaria . DIRECTORY_SEPARATOR . 'uploads');
+
+        $arquivoTar = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'backup_tecnicos_' . uniqid() . '.tar';
+        $phar = new PharData($arquivoTar);
+        $phar->buildFromDirectory($baseTemporaria);
+        $phar->compress(Phar::GZ);
+        unset($phar);
+
+        @unlink($arquivoTar);
+        excluirDiretorio($baseTemporaria);
+
+        $arquivoTemporario = $arquivoTar . '.gz';
+        $nomeArquivo = 'backup_tecnicos_' . $dataBackup . '.tar.gz';
+        $tipoConteudo = 'application/gzip';
+    } else {
+        http_response_code(500);
+        echo 'Backup indisponível: o servidor não possui ZipArchive nem PharData.';
+        exit;
+    }
+
+    while (ob_get_level() > 0) {
+        ob_end_clean();
+    }
+
+    header('Content-Type: ' . $tipoConteudo);
+    header('Content-Disposition: attachment; filename="' . $nomeArquivo . '"');
+    header('Content-Length: ' . filesize($arquivoTemporario));
+    header('Pragma: no-cache');
+    header('Expires: 0');
+
+    readfile($arquivoTemporario);
+    @unlink($arquivoTemporario);
     exit;
 }
 
@@ -615,6 +764,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         .btn-add { background-color: #2e7d32; }
         .btn-import { background-color: #0277bd; margin-right: 5px; }
         .btn-export { background-color: #00897b; margin-right: 5px; }
+        .btn-backup { background-color: #6d4c41; margin-right: 5px; }
         .btn-user { background-color: #7b1fa2; margin-right: 5px; }
         .btn-theme-btn { background-color: var(--btn-theme); margin-right: 5px; }
         .btn-history { background-color: #546e7a; margin-right: 5px; }
@@ -696,6 +846,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             
             <?php if($_SESSION['usuario'] === 'admin'): ?>
                 <button class="btn btn-user" onclick="openUserModal()" title="Gerir Utilizadores"><i class="fa fa-user-gear"></i></button>
+                <a href="index.php?action=baixar_backup" class="btn btn-backup" title="Baixar backup dos JSONs, fotos e documentos"><i class="fa fa-file-zipper"></i> Backup</a>
             <?php endif; ?>
             <a href="index.php?action=exportar_excel" class="btn btn-export" title="Baixar a lista em formato compatível com Excel"><i class="fa fa-file-excel"></i> Exportar Excel</a>
             <button class="btn btn-import" onclick="openImportModal()"><i class="fa fa-file-csv"></i> Importar CSV</button>
