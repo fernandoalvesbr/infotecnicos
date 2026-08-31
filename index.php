@@ -94,6 +94,8 @@ function camposAlterados($antes, $depois) {
         'tel_emergencia' => 'Telefone de emergência',
         'contato_emergencia' => 'Contacto de emergência',
         'tipo_tecnico' => 'Tipo de técnico',
+        'ferias_inicio' => 'Início das férias',
+        'ferias_fim' => 'Retorno das férias',
         'arquivo_aso' => 'Documento ASO',
         'arquivo_nr' => 'Documento NR',
         'arquivo_cnh' => 'Documento CNH',
@@ -291,7 +293,9 @@ if (isset($_GET['action']) && $_GET['action'] === 'exportar_excel') {
         'Tipo de Técnico',
         'Documento ASO',
         'Documento NR',
-        'Documento CNH'
+        'Documento CNH',
+        'Início das Férias',
+        'Retorno das Férias'
     ), ';');
 
     foreach ($funcionarios as $func) {
@@ -309,7 +313,9 @@ if (isset($_GET['action']) && $_GET['action'] === 'exportar_excel') {
             isset($func['tipo_tecnico']) ? $func['tipo_tecnico'] : '',
             isset($func['arquivo_aso']) ? $func['arquivo_aso'] : '',
             isset($func['arquivo_nr']) ? $func['arquivo_nr'] : '',
-            isset($func['arquivo_cnh']) ? $func['arquivo_cnh'] : ''
+            isset($func['arquivo_cnh']) ? $func['arquivo_cnh'] : '',
+            isset($func['ferias_inicio']) ? $func['ferias_inicio'] : '',
+            isset($func['ferias_fim']) ? $func['ferias_fim'] : ''
         ), ';');
     }
 
@@ -405,6 +411,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'tel_emergencia' => $tel_emerg,
                     'contato_emergencia' => $contato_emerg,
                     'tipo_tecnico' => '',
+                    'ferias_inicio' => '',
+                    'ferias_fim' => '',
                     'arquivo_aso' => '',
                     'arquivo_nr' => '',
                     'arquivo_cnh' => '',
@@ -444,6 +452,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'tel_emergencia' => $_POST['tel_emergencia'],
             'contato_emergencia' => $_POST['contato_emergencia'],
             'tipo_tecnico' => isset($_POST['tipo_tecnico']) ? $_POST['tipo_tecnico'] : 'acesso',
+            'ferias_inicio' => isset($_POST['ferias_inicio']) ? $_POST['ferias_inicio'] : '',
+            'ferias_fim' => isset($_POST['ferias_fim']) ? $_POST['ferias_fim'] : '',
             'arquivo_aso' => isset($_POST['arquivo_aso_atual']) ? $_POST['arquivo_aso_atual'] : '',
             'arquivo_nr' => isset($_POST['arquivo_nr_atual']) ? $_POST['arquivo_nr_atual'] : '',
             'arquivo_cnh' => isset($_POST['arquivo_cnh_atual']) ? $_POST['arquivo_cnh_atual'] : '',
@@ -614,6 +624,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         .btn-delete { background-color: #d32f2f; padding: 6px 10px; }
         .btn-doc { background-color: #2e7d32; padding: 4px 8px; font-size: 12px; border-radius: 12px; }
         .btn-none { background-color: var(--input-bg); padding: 4px 8px; font-size: 12px; border-radius: 12px; color: var(--text-muted); border: 1px solid var(--border-color); cursor: default; }
+        .vacation-dates { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-strong); white-space: nowrap; }
+        .vacation-dates i { color: var(--accent-orange); }
+        .vacation-dates small { color: var(--text-muted); font-weight: 600; }
+        tr.vacation-warning { background-color: rgba(255, 193, 7, 0.18); }
+        tr.vacation-warning:hover { background-color: rgba(255, 193, 7, 0.26); }
         
         table { width: 100%; border-collapse: collapse; background-color: var(--table-bg); border-radius: 8px; overflow: hidden; }
         th, td { padding: 15px; text-align: left; border-bottom: 1px solid var(--border-color); vertical-align: middle; }
@@ -722,15 +737,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <th>ASO</th>
                 <th>NR</th>
                 <th>CNH</th>
+                <th>Férias</th>
                 <th>Ação</th>
             </tr>
         </thead>
         <tbody>
             <?php if(empty($funcionarios)): ?>
-                <tr><td colspan="5" style="text-align:center; color:var(--text-muted);">Nenhum técnico registado.</td></tr>
+                <tr><td colspan="6" style="text-align:center; color:var(--text-muted);">Nenhum técnico registado.</td></tr>
             <?php endif; ?>
             <?php foreach (array_reverse($funcionarios) as $func): ?>
-            <tr data-tipo-tecnico="<?php echo isset($func['tipo_tecnico']) ? htmlspecialchars($func['tipo_tecnico']) : ''; ?>">
+            <?php
+                $feriasInicioLinha = isset($func['ferias_inicio']) ? $func['ferias_inicio'] : '';
+                $destacarFerias = false;
+                if (!empty($feriasInicioLinha)) {
+                    $hoje = new DateTime('today');
+                    $limiteFerias = (clone $hoje)->modify('+1 month');
+                    $dataFerias = DateTime::createFromFormat('Y-m-d', $feriasInicioLinha);
+                    $destacarFerias = $dataFerias && $dataFerias >= $hoje && $dataFerias <= $limiteFerias;
+                }
+            ?>
+            <tr class="<?php echo $destacarFerias ? 'vacation-warning' : ''; ?>" data-tipo-tecnico="<?php echo isset($func['tipo_tecnico']) ? htmlspecialchars($func['tipo_tecnico']) : ''; ?>">
                 <td>
                     <div class="tech-profile">
                         <div class="tech-avatar-cell">
@@ -768,6 +794,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <?php if (!empty($func['arquivo_cnh'])): ?>
                         <?php $v = @filemtime($diretorioUploads . $func['arquivo_cnh']); ?>
                         <a href="uploads/<?php echo htmlspecialchars($func['arquivo_cnh']); ?>?v=<?php echo $v; ?>" target="_blank" class="btn btn-doc" onclick="registrarCliqueDocumento('CNH', '<?php echo htmlspecialchars($func['id'], ENT_QUOTES, 'UTF-8'); ?>')"><i class="fa fa-check-circle"></i> Ver Doc</a>
+                    <?php else: ?>
+                        <span class="btn btn-none">-</span>
+                    <?php endif; ?>
+                </td>
+                <td>
+                    <?php
+                        $feriasInicio = isset($func['ferias_inicio']) ? $func['ferias_inicio'] : '';
+                        $feriasFim = isset($func['ferias_fim']) ? $func['ferias_fim'] : '';
+                    ?>
+                    <?php if (!empty($feriasInicio) || !empty($feriasFim)): ?>
+                        <span class="vacation-dates">
+                            <i class="fa fa-calendar-days"></i>
+                            <?php echo !empty($feriasInicio) ? htmlspecialchars(date('d/m/Y', strtotime($feriasInicio))) : '--/--/----'; ?>
+                            <small>até</small>
+                            <?php echo !empty($feriasFim) ? htmlspecialchars(date('d/m/Y', strtotime($feriasFim))) : '--/--/----'; ?>
+                        </span>
                     <?php else: ?>
                         <span class="btn btn-none">-</span>
                     <?php endif; ?>
@@ -972,6 +1014,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <small id="cnh_status" style="color: #4caf50; display:block; margin-top:4px;"></small>
             </div>
 
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Saída de Férias</label>
+                    <input type="date" name="ferias_inicio" id="ferias_inicio">
+                </div>
+                <div class="form-group">
+                    <label>Retorno de Férias</label>
+                    <input type="date" name="ferias_fim" id="ferias_fim">
+                </div>
+            </div>
+
             <div class="modal-footer">
                 <button type="button" class="btn btn-cancel" onclick="closeModal()">Cancelar</button>
                 <button type="submit" class="btn btn-add">Guardar Dados</button>
@@ -1087,7 +1140,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // Funções de Visualização de Dados (Novo)
     function viewInfo(func) {
         const tipoTecnico = func.tipo_tecnico === 'redes' ? 'Técnico de redes' : 'Técnico de acesso';
-        currentInfoText = `Nome: ${func.nome}\nNome da Mãe: ${func.nome_mae || 'N/A'}\nTipo: ${tipoTecnico}\nRG: ${func.rg}\nCPF: ${func.cpf}\nE-mail Pessoal: ${func.email_pessoal || 'N/A'}\nE-mail Empresarial: ${func.email_empresarial || 'N/A'}\nTel Empresarial: ${func.tel_empresarial || 'N/A'}\nTel Contacto: ${func.tel_contato}\nContacto de Emergência: ${func.contato_emergencia} (${func.tel_emergencia})`;
+        const feriasInicio = formatDateBr(func.ferias_inicio);
+        const feriasFim = formatDateBr(func.ferias_fim);
+        currentInfoText = `Nome: ${func.nome}\nNome da Mãe: ${func.nome_mae || 'N/A'}\nTipo: ${tipoTecnico}\nRG: ${func.rg}\nCPF: ${func.cpf}\nE-mail Pessoal: ${func.email_pessoal || 'N/A'}\nE-mail Empresarial: ${func.email_empresarial || 'N/A'}\nTel Empresarial: ${func.tel_empresarial || 'N/A'}\nTel Contacto: ${func.tel_contato}\nFérias: ${feriasInicio} até ${feriasFim}\nContacto de Emergência: ${func.contato_emergencia} (${func.tel_emergencia})`;
 
         infoViewerContent.innerHTML = `
             <p style="margin: 5px 0;"><strong>Nome:</strong> <span style="color:var(--text-strong);">${func.nome}</span></p>
@@ -1099,12 +1154,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <p style="margin: 5px 0;"><strong>E-mail Empresarial:</strong> <span style="color:var(--text-strong);">${func.email_empresarial || '-'}</span></p>
             <p style="margin: 5px 0;"><strong>Tel Empresarial:</strong> <span style="color:var(--text-strong);">${func.tel_empresarial || '-'}</span></p>
             <p style="margin: 5px 0;"><strong>Tel Contacto:</strong> <span style="color:var(--text-strong);">${func.tel_contato}</span></p>
+            <p style="margin: 5px 0;"><strong>Férias:</strong> <span style="color:var(--text-strong);">${feriasInicio} até ${feriasFim}</span></p>
             <div style="margin-top:15px; padding-top:10px; border-top: 1px solid var(--border-color);">
                 <strong style="color:var(--accent-orange);">Contacto de Emergência:</strong><br>
                 <span style="color:var(--text-strong);">${func.contato_emergencia} - ${func.tel_emergencia}</span>
             </div>
         `;
         infoViewerModal.style.display = 'flex';
+    }
+
+    function formatDateBr(value) {
+        if (!value) return '-';
+        const parts = value.split('-');
+        if (parts.length !== 3) return value;
+        return `${parts[2]}/${parts[1]}/${parts[0]}`;
     }
 
     function closeInfoView() {
@@ -1149,7 +1212,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         document.getElementById('cnh_status').innerText = '';
         document.getElementById('foto_status').innerText = '';
         
-        const inputs = modal.querySelectorAll('input[type="text"], input[type="email"]');
+        const inputs = modal.querySelectorAll('input[type="text"], input[type="email"], input[type="date"]');
         inputs.forEach(input => input.value = '');
         modal.style.display = 'flex';
     }
@@ -1175,6 +1238,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         document.getElementById('email_pessoal').value = func.email_pessoal || '';
         document.getElementById('email_empresarial').value = func.email_empresarial || '';
         document.getElementById('tipo_tecnico').value = func.tipo_tecnico || 'acesso';
+        document.getElementById('ferias_inicio').value = func.ferias_inicio || '';
+        document.getElementById('ferias_fim').value = func.ferias_fim || '';
         document.getElementById('tel_empresarial').value = func.tel_empresarial;
         document.getElementById('tel_contato').value = func.tel_contato;
         document.getElementById('tel_emergencia').value = func.tel_emergencia;
