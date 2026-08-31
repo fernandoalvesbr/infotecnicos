@@ -779,6 +779,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         .vacation-dates small { color: var(--text-muted); font-weight: 600; }
         tr.vacation-warning { background-color: rgba(255, 193, 7, 0.18); }
         tr.vacation-warning:hover { background-color: rgba(255, 193, 7, 0.26); }
+        tr.vacation-current { background-color: rgba(46, 125, 50, 0.22); }
+        tr.vacation-current:hover { background-color: rgba(46, 125, 50, 0.32); }
+        tr.vacation-overdue { background-color: rgba(211, 47, 47, 0.22); }
+        tr.vacation-overdue:hover { background-color: rgba(211, 47, 47, 0.32); }
         
         table { width: 100%; border-collapse: collapse; background-color: var(--table-bg); border-radius: 8px; overflow: hidden; }
         th, td { padding: 15px; text-align: left; border-bottom: 1px solid var(--border-color); vertical-align: middle; }
@@ -899,15 +903,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <?php foreach (array_reverse($funcionarios) as $func): ?>
             <?php
                 $feriasInicioLinha = isset($func['ferias_inicio']) ? $func['ferias_inicio'] : '';
-                $destacarFerias = false;
+                $classeFerias = '';
                 if (!empty($feriasInicioLinha)) {
                     $hoje = new DateTime('today');
-                    $limiteFerias = (clone $hoje)->modify('+1 month');
+                    $limiteUrgente = (clone $hoje)->modify('+1 month');
+                    $limiteAviso = (clone $hoje)->modify('+2 months');
                     $dataFerias = DateTime::createFromFormat('Y-m-d', $feriasInicioLinha);
-                    $destacarFerias = $dataFerias && $dataFerias >= $hoje && $dataFerias <= $limiteFerias;
+                    if ($dataFerias && $dataFerias < $hoje) {
+                        $classeFerias = 'vacation-overdue';
+                    } elseif ($dataFerias && $dataFerias <= $limiteUrgente) {
+                        $classeFerias = 'vacation-current';
+                    } elseif ($dataFerias && $dataFerias >= $hoje && $dataFerias <= $limiteAviso) {
+                        $classeFerias = 'vacation-warning';
+                    }
                 }
             ?>
-            <tr class="<?php echo $destacarFerias ? 'vacation-warning' : ''; ?>" data-tipo-tecnico="<?php echo isset($func['tipo_tecnico']) ? htmlspecialchars($func['tipo_tecnico']) : ''; ?>">
+            <tr class="<?php echo $classeFerias; ?>" data-tipo-tecnico="<?php echo isset($func['tipo_tecnico']) ? htmlspecialchars($func['tipo_tecnico']) : ''; ?>">
                 <td>
                     <div class="tech-profile">
                         <div class="tech-avatar-cell">
@@ -1167,11 +1178,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             <div class="form-row">
                 <div class="form-group">
-                    <label>Saída de Férias</label>
+                    <label>Início das Férias</label>
                     <input type="date" name="ferias_inicio" id="ferias_inicio">
                 </div>
                 <div class="form-group">
-                    <label>Retorno de Férias</label>
+                    <label>Final das Férias</label>
                     <input type="date" name="ferias_fim" id="ferias_fim">
                 </div>
             </div>
