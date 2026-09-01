@@ -1004,6 +1004,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
 
+    // Ação: Redefinir senha de utilizador (Painel Admin)
+    if ($acao === 'redefinir_senha_usuario' && $isAdmin) {
+        $username_form = isset($_POST['username_redefinir']) ? trim($_POST['username_redefinir']) : '';
+        $password_form = isset($_POST['senha_redefinir']) ? trim($_POST['senha_redefinir']) : '';
+        if (!empty($username_form) && !empty($password_form)) {
+            foreach ($usuarios as $key => $u) {
+                if ($u['username'] === $username_form) {
+                    $usuarios[$key]['password'] = password_hash($password_form, PASSWORD_DEFAULT);
+                    file_put_contents($arquivoUsuariosJson, json_encode($usuarios));
+                    registrarHistorico($arquivoHistoricoJson, $_SESSION['usuario'], 'Redefiniu senha de usuário', 'Usuário: ' . $username_form);
+                    break;
+                }
+            }
+        }
+        header("Location: index.php");
+        exit;
+    }
+
     // Ação: Excluir Utilizador
     if ($acao === 'excluir_usuario') {
         $user_para_excluir = $_POST['username_excluir'];
@@ -1090,6 +1108,7 @@ verificarEnvioEmailsFerias($funcionarios, $config, $arquivoConfigJson, $arquivoH
         .btn-pwd { background-color: #f57c00; font-size: 12px; padding: 5px 10px;}
         .btn-logout { background-color: #616161; font-size: 12px; padding: 5px 10px; margin-left: 5px;}
         .btn-edit { background-color: #1976d2; padding: 6px 10px; }
+        .btn-user-password { background-color: #1976d2; padding: 4px 8px; font-size: 11px; margin-right: 4px; }
         .btn-delete { background-color: #d32f2f; padding: 6px 10px; }
         .btn-doc { background-color: #2e7d32; padding: 4px 8px; font-size: 12px; border-radius: 12px; }
         .btn-none { background-color: var(--input-bg); padding: 4px 8px; font-size: 12px; border-radius: 12px; color: var(--text-muted); border: 1px solid var(--border-color); cursor: default; }
@@ -1135,6 +1154,7 @@ verificarEnvioEmailsFerias($funcionarios, $config, $arquivoConfigJson, $arquivoH
         .modal-footer { margin-top: 20px; text-align: right; }
         .btn-cancel { background-color: var(--text-muted); margin-right: 10px; color: #fff; }
         .user-list-item { display: flex; justify-content: space-between; align-items: center; background: var(--input-bg); border: 1px solid var(--border-color); padding: 8px; margin-bottom: 5px; border-radius: 4px; }
+        .user-actions { display: flex; align-items: center; gap: 4px; }
         .filter-bar { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 15px; flex-wrap: wrap; }
         .filter-bar label { color: var(--text-muted); font-size: 14px; }
         .filter-select { width: auto; min-width: 190px; }
@@ -1628,6 +1648,8 @@ verificarEnvioEmailsFerias($funcionarios, $config, $arquivoConfigJson, $arquivoH
             <?php foreach($usuarios as $u): ?>
                 <div class="user-list-item">
                     <span><i class="fa fa-user" style="color:var(--text-muted); margin-right:8px;"></i> <?php echo htmlspecialchars($u['username']); ?></span>
+                    <div class="user-actions">
+                        <button type="button" class="btn btn-user-password" onclick='openResetUserPasswordModal(<?php echo htmlspecialchars(json_encode($u['username']), ENT_QUOTES, 'UTF-8'); ?>)' title="Redefinir senha"><i class="fa fa-key"></i></button>
                     <?php if($u['username'] === 'admin'): ?>
                         <span style="font-size:11px; color:#2e7d32; font-weight:bold; padding-right:10px;">Master</span>
                     <?php else: ?>
@@ -1637,12 +1659,36 @@ verificarEnvioEmailsFerias($funcionarios, $config, $arquivoConfigJson, $arquivoH
                             <button type="submit" class="btn btn-delete" style="padding:4px 8px; font-size:11px;"><i class="fa fa-trash"></i></button>
                         </form>
                     <?php endif; ?>
+                    </div>
                 </div>
             <?php endforeach; ?>
         </div>
         <div class="modal-footer">
             <button type="button" class="btn btn-cancel" onclick="closeUserModal()">Fechar</button>
         </div>
+    </div>
+</div>
+
+<!-- MODAL: REDEFINIR SENHA DE USUÁRIO -->
+<div class="modal" id="resetUserPasswordModal">
+    <div class="modal-content" style="width: 400px;">
+        <h3 style="margin-top:0;">Redefinir Senha</h3>
+        <form method="POST">
+            <input type="hidden" name="acao" value="redefinir_senha_usuario">
+            <input type="hidden" name="username_redefinir" id="username_redefinir">
+            <div class="form-group">
+                <label>Utilizador</label>
+                <input type="text" id="username_redefinir_display" disabled>
+            </div>
+            <div class="form-group">
+                <label>Nova Senha</label>
+                <input type="password" name="senha_redefinir" id="senha_redefinir" required>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-cancel" onclick="closeResetUserPasswordModal()">Cancelar</button>
+                <button type="submit" class="btn btn-add">Salvar Senha</button>
+            </div>
+        </form>
     </div>
 </div>
 
@@ -1701,6 +1747,7 @@ verificarEnvioEmailsFerias($funcionarios, $config, $arquivoConfigJson, $arquivoH
 
     const modal = document.getElementById('formModal');
     const userModal = document.getElementById('userModal');
+    const resetUserPasswordModal = document.getElementById('resetUserPasswordModal');
     const importModal = document.getElementById('importModal');
     const pwdModal = document.getElementById('pwdModal');
     const historyModal = document.getElementById('historyModal');
@@ -1803,6 +1850,17 @@ verificarEnvioEmailsFerias($funcionarios, $config, $arquivoConfigJson, $arquivoH
     function closeModal() { modal.style.display = 'none'; }
     function openUserModal() { userModal.style.display = 'flex'; }
     function closeUserModal() { userModal.style.display = 'none'; }
+    function openResetUserPasswordModal(username) {
+        document.getElementById('username_redefinir').value = username;
+        document.getElementById('username_redefinir_display').value = username;
+        resetUserPasswordModal.style.display = 'flex';
+    }
+    function closeResetUserPasswordModal() {
+        resetUserPasswordModal.style.display = 'none';
+        document.getElementById('username_redefinir').value = '';
+        document.getElementById('username_redefinir_display').value = '';
+        document.getElementById('senha_redefinir').value = '';
+    }
     function openImportModal() { importModal.style.display = 'flex'; }
     function closeImportModal() { importModal.style.display = 'none'; }
     function openPwdModal() { pwdModal.style.display = 'flex'; }
