@@ -207,6 +207,21 @@ function valorConfigEmail($config, $padroes, $campo) {
     return isset($config[$campo]) && trim((string)$config[$campo]) !== '' ? trim((string)$config[$campo]) : $padroes[$campo];
 }
 
+function aplicarConfigEmailDoPost($config, $emailConfigPadrao) {
+    $config['smtp_host'] = isset($_POST['smtp_host']) && trim($_POST['smtp_host']) !== '' ? trim($_POST['smtp_host']) : $emailConfigPadrao['smtp_host'];
+    $config['smtp_usuario'] = isset($_POST['smtp_usuario']) && trim($_POST['smtp_usuario']) !== '' ? trim($_POST['smtp_usuario']) : $emailConfigPadrao['smtp_usuario'];
+    $config['smtp_porta'] = isset($_POST['smtp_porta']) && trim($_POST['smtp_porta']) !== '' ? trim($_POST['smtp_porta']) : $emailConfigPadrao['smtp_porta'];
+    $config['smtp_seguranca'] = isset($_POST['smtp_seguranca']) && in_array($_POST['smtp_seguranca'], array('nenhuma', 'starttls', 'ssl'), true) ? $_POST['smtp_seguranca'] : $emailConfigPadrao['smtp_seguranca'];
+    $config['smtp_remetente'] = isset($_POST['smtp_remetente']) && trim($_POST['smtp_remetente']) !== '' ? trim($_POST['smtp_remetente']) : $emailConfigPadrao['smtp_remetente'];
+    $config['email_ferias_destinatario'] = isset($_POST['email_ferias_destinatario']) && trim($_POST['email_ferias_destinatario']) !== '' ? trim($_POST['email_ferias_destinatario']) : $emailConfigPadrao['email_ferias_destinatario'];
+    $config['email_destinatario_acesso'] = isset($_POST['email_destinatario_acesso']) && trim($_POST['email_destinatario_acesso']) !== '' ? trim($_POST['email_destinatario_acesso']) : $emailConfigPadrao['email_destinatario_acesso'];
+    $config['email_destinatario_redes'] = isset($_POST['email_destinatario_redes']) && trim($_POST['email_destinatario_redes']) !== '' ? trim($_POST['email_destinatario_redes']) : $emailConfigPadrao['email_destinatario_redes'];
+    if (isset($_POST['smtp_senha']) && trim($_POST['smtp_senha']) !== '') {
+        $config['smtp_senha'] = trim($_POST['smtp_senha']);
+    }
+    return $config;
+}
+
 function enviarEmailSmtp($host, $porta, $usuario, $senha, $de, $para, $assunto, $mensagem, $seguranca = 'nenhuma') {
     if (empty($senha)) return false;
 
@@ -761,21 +776,43 @@ function processarDocumento($filePost, $prefixo, $id, $diretorioUploads) {
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $acao = isset($_POST['acao']) ? $_POST['acao'] : '';
 
+    // Ação: Testar configurações de e-mail do admin
+    if ($acao === 'testar_email_config' && $isAdmin) {
+        $configTeste = aplicarConfigEmailDoPost($config, $emailConfigPadrao);
+        $destinatariosTeste = array_unique(array_filter(array(
+            valorConfigEmail($configTeste, $emailConfigPadrao, 'email_destinatario_acesso'),
+            valorConfigEmail($configTeste, $emailConfigPadrao, 'email_destinatario_redes')
+        )));
+
+        $enviados = 0;
+        if (!empty($configTeste['smtp_senha'])) {
+            foreach ($destinatariosTeste as $destinatarioTeste) {
+                $enviado = enviarEmailSmtp(
+                    valorConfigEmail($configTeste, $emailConfigPadrao, 'smtp_host'),
+                    valorConfigEmail($configTeste, $emailConfigPadrao, 'smtp_porta'),
+                    valorConfigEmail($configTeste, $emailConfigPadrao, 'smtp_usuario'),
+                    $configTeste['smtp_senha'],
+                    valorConfigEmail($configTeste, $emailConfigPadrao, 'smtp_remetente'),
+                    $destinatarioTeste,
+                    'Teste de e-mail - Controle de Técnicos',
+                    'Este é um teste de envio das configurações de e-mail do sistema de técnicos.',
+                    valorConfigEmail($configTeste, $emailConfigPadrao, 'smtp_seguranca')
+                );
+                if ($enviado) $enviados++;
+            }
+        }
+
+        $resultadoTeste = $enviados > 0 && $enviados === count($destinatariosTeste) ? 'ok' : 'erro';
+        registrarHistorico($arquivoHistoricoJson, $_SESSION['usuario'], 'Testou e-mail', $resultadoTeste === 'ok' ? 'Teste enviado com sucesso' : 'Falha ao enviar teste');
+        header("Location: index.php?email_teste=" . $resultadoTeste);
+        exit;
+    }
+
     // Ação: Configurações do admin
     if ($acao === 'salvar_config_filtro' && $isAdmin) {
         $config['filtro_usuarios'] = isset($_POST['filtro_usuarios']) && $_POST['filtro_usuarios'] === '1';
         $config['email_ferias_ativo'] = isset($_POST['email_ferias_ativo']) && $_POST['email_ferias_ativo'] === '1';
-        $config['smtp_host'] = isset($_POST['smtp_host']) && trim($_POST['smtp_host']) !== '' ? trim($_POST['smtp_host']) : $emailConfigPadrao['smtp_host'];
-        $config['smtp_usuario'] = isset($_POST['smtp_usuario']) && trim($_POST['smtp_usuario']) !== '' ? trim($_POST['smtp_usuario']) : $emailConfigPadrao['smtp_usuario'];
-        $config['smtp_porta'] = isset($_POST['smtp_porta']) && trim($_POST['smtp_porta']) !== '' ? trim($_POST['smtp_porta']) : $emailConfigPadrao['smtp_porta'];
-        $config['smtp_seguranca'] = isset($_POST['smtp_seguranca']) && in_array($_POST['smtp_seguranca'], array('nenhuma', 'starttls', 'ssl'), true) ? $_POST['smtp_seguranca'] : $emailConfigPadrao['smtp_seguranca'];
-        $config['smtp_remetente'] = isset($_POST['smtp_remetente']) && trim($_POST['smtp_remetente']) !== '' ? trim($_POST['smtp_remetente']) : $emailConfigPadrao['smtp_remetente'];
-        $config['email_ferias_destinatario'] = isset($_POST['email_ferias_destinatario']) && trim($_POST['email_ferias_destinatario']) !== '' ? trim($_POST['email_ferias_destinatario']) : $emailConfigPadrao['email_ferias_destinatario'];
-        $config['email_destinatario_acesso'] = isset($_POST['email_destinatario_acesso']) && trim($_POST['email_destinatario_acesso']) !== '' ? trim($_POST['email_destinatario_acesso']) : $emailConfigPadrao['email_destinatario_acesso'];
-        $config['email_destinatario_redes'] = isset($_POST['email_destinatario_redes']) && trim($_POST['email_destinatario_redes']) !== '' ? trim($_POST['email_destinatario_redes']) : $emailConfigPadrao['email_destinatario_redes'];
-        if (isset($_POST['smtp_senha']) && trim($_POST['smtp_senha']) !== '') {
-            $config['smtp_senha'] = trim($_POST['smtp_senha']);
-        }
+        $config = aplicarConfigEmailDoPost($config, $emailConfigPadrao);
         if (!isset($config['emails_ferias_enviados']) || !is_array($config['emails_ferias_enviados'])) {
             $config['emails_ferias_enviados'] = array();
         }
@@ -1163,6 +1200,10 @@ verificarEnvioEmailsFerias($funcionarios, $config, $arquivoConfigJson, $arquivoH
         .admin-filter-config select, .admin-filter-config input { width: auto; padding: 6px; background-color: var(--input-bg); border: 1px solid var(--input-border); color: var(--text-color); border-radius: 4px; }
         .admin-filter-config input { min-width: 150px; }
         .btn-save-config { background-color: #455a64; padding: 6px 10px; font-size: 12px; }
+        .btn-test-email { background-color: #1565c0; padding: 6px 10px; font-size: 12px; }
+        .notice { border-radius: 4px; padding: 10px 12px; margin-bottom: 15px; font-weight: 600; }
+        .notice-success { background: rgba(46, 125, 50, 0.16); color: #2e7d32; border: 1px solid rgba(46, 125, 50, 0.35); }
+        .notice-error { background: rgba(211, 47, 47, 0.16); color: #d32f2f; border: 1px solid rgba(211, 47, 47, 0.35); }
         .history-list { display: flex; flex-direction: column; gap: 8px; max-height: 60vh; overflow-y: auto; }
         .history-item { background: var(--input-bg); border: 1px solid var(--border-color); border-radius: 6px; padding: 10px; }
         .history-top { display: flex; justify-content: space-between; gap: 10px; align-items: center; margin-bottom: 5px; }
@@ -1179,6 +1220,14 @@ verificarEnvioEmailsFerias($funcionarios, $config, $arquivoConfigJson, $arquivoH
 <body>
 
 <div class="container">
+    <?php if (isset($_GET['email_teste'])): ?>
+        <?php if ($_GET['email_teste'] === 'ok'): ?>
+            <div class="notice notice-success">E-mail de teste enviado com sucesso.</div>
+        <?php else: ?>
+            <div class="notice notice-error">Não foi possível enviar o e-mail de teste. Verifique servidor, porta, segurança, usuário, senha e destinatários.</div>
+        <?php endif; ?>
+    <?php endif; ?>
+
     <div class="header-bar">
         <div>
             <h2 style="margin:0 0 5px 0;">Documentação de Técnicos</h2>
@@ -1219,7 +1268,6 @@ verificarEnvioEmailsFerias($funcionarios, $config, $arquivoConfigJson, $arquivoH
 
         <?php if($isAdmin): ?>
             <form method="POST" class="admin-filter-config">
-                <input type="hidden" name="acao" value="salvar_config_filtro">
                 <label for="filtro_usuarios">Filtro para usuários</label>
                 <select id="filtro_usuarios" name="filtro_usuarios">
                     <option value="1" <?php echo $filtroUsuariosAtivo ? 'selected' : ''; ?>>Ativado</option>
@@ -1251,7 +1299,8 @@ verificarEnvioEmailsFerias($funcionarios, $config, $arquivoConfigJson, $arquivoH
                 <input type="email" id="email_destinatario_redes" name="email_destinatario_redes" value="<?php echo htmlspecialchars(valorConfigEmail($config, $emailConfigPadrao, 'email_destinatario_redes')); ?>">
                 <label for="smtp_senha">Senha SMTP</label>
                 <input type="password" id="smtp_senha" name="smtp_senha" placeholder="<?php echo empty($config['smtp_senha']) ? 'Obrigatória' : 'Senha salva'; ?>">
-                <button type="submit" class="btn btn-save-config"><i class="fa fa-save"></i> Salvar</button>
+                <button type="submit" name="acao" value="salvar_config_filtro" class="btn btn-save-config"><i class="fa fa-save"></i> Salvar</button>
+                <button type="submit" name="acao" value="testar_email_config" class="btn btn-test-email"><i class="fa fa-paper-plane"></i> Testar E-mail</button>
             </form>
         <?php endif; ?>
     </div>
